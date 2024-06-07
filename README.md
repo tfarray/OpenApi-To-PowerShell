@@ -17,7 +17,7 @@ As the `.ps1` file contains all the commands that you will be doing, the `.ps1m`
 * `initialize-MyProject`
 This code is not yet generated, and you will need to get inspired by the examples that are in this repository.
 Only once, you will need to create a manifest file. There is a built in command that will do it for you, example :
-* `New-ModuleManifest -Path E:\OpenApi-To-PowerShell\Examples\GitHub\GitHub.psd1 -Author OpenApi-To-PowerShell -NestedModules GitHub.ps1 -CmdletsToExport * -FunctionsToExport * -VariablesToExport * -AliasesToExport *`
+  * `New-ModuleManifest -Path E:\OpenApi-To-PowerShell\Examples\GitHub\GitHub.psd1 -Author OpenApi-To-PowerShell -NestedModules GitHub.ps1 -CmdletsToExport * -FunctionsToExport * -VariablesToExport * -AliasesToExport *`
 
 # How to use the new module ?
 * Load the module `import-module mymodule`

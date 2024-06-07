@@ -15,9 +15,9 @@ $Variables = @{
     FunctionRename = @{
         "New-GitHubReposActionsWorkflowsDispatches"   = "Start-GitHubReposActionsWorkflows"
     }
-    AdditionalSwitches = @{
+    AdditionalParameters = @{
         page = @{ GetAll = @{ Type = "Switch"  ; Parameter = @() }}
     }
 }
 
-ConvertProject.ps1 @Variables
+.\ConvertProject.ps1 @Variables

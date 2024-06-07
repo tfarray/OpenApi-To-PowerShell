@@ -1,13 +1,14 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory,Position=0)][string]$ProjectName,
-    [hastable]$LastFunctionToVerb,
-    [hastable]$FunctionRename,
-    [hastable]$AdditionalParameters,
+    [hashtable]$LastFunctionToVerb,
+    [hashtable]$FunctionRename,
+    [hashtable]$AdditionalParameters,
     [String]$OutPath
 
 )
 # $ProjectName = "GitHub"
+$error.clear()
 
 ###############
 # Working on initial path and json file
@@ -57,8 +58,9 @@ $DescriptionToVerb = @{
     }
 }
 
-
+###########################################
 # Replacing all refs to the target values
+###########################################
 function Replace-References {
     param( [string[]]$kpath )
     # write-host $Kpath
@@ -107,6 +109,47 @@ $Open.paths.psbase.keys | % {
     }
 }
 
+###########################################
+# Replacing entries of type "requestBody"
+###########################################
+$Key = '/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches'
+$Method = 'post'
+foreach ($Key in $Open.paths.psbase.keys) {
+    foreach ($Method in $Open.paths[$key].psbase.keys) {
+        $Target = $Open.paths[$key][$Method]
+        if ($Target.containsKey("requestBody")) {
+            if ($Target["requestBody"].containsKey("content")) {
+                if ($Target["requestBody"]["content"].containsKey("application/json")) {
+                    if ($Target["requestBody"]["content"]["application/json"].containsKey("schema")) {
+                        $Schema = $Target["requestBody"]["content"]["application/json"]["schema"]
+                        if ($schema.containskey("properties")) {
+                            foreach ($prop in $schema.properties.psbase.keys) {
+                                Write-host Schema : $prop
+                                $NewParam = [ordered]@{}
+                                $NewParam["name"] = "$Prop"
+                                $NewParam["description"] = $schema.properties[$Prop]["description"]
+                                $NewParam["schema"] = @{ "Type" = $schema.properties[$Prop]["type"] }
+                                $Target["parameters"] += @($NewParam)
+                            }
+                        }
+                        if ($schema.containskey("oneOf")) {
+                            $schema.oneOf | % {
+                                foreach ($prop in $_.properties.psbase.keys) {
+                                    $NewParam = [ordered]@{}
+                                    $NewParam["name"] = "$Prop"
+                                    $NewParam["description"] = $_.properties[$Prop]["description"]
+                                    $NewParam["schema"] = @{ "Type" = $_.properties[$Prop]["type"] }
+                                    $Target["parameters"] += @($NewParam)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        # if ($Error) { write-host Key : $Key Methd : $Method ; return }
+    }
+}
 ###############
 # Functions
 ###############
@@ -479,7 +522,7 @@ if ($SchemaConversion.count) {
 Write-Host Phase 5 : Exporting the module -foregroundcolor green
 
 if ($Output) {
-    $Module -join "`n"  | out-file $OutPath
+    $Module -join "`n"  | out-file $Output
 }
 
 
