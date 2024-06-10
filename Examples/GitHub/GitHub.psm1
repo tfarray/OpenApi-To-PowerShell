@@ -13,6 +13,7 @@ $GitHubConf = @{
 }
 
 
+
 function Initialize-GitHub {
     [CmdletBinding()]
 	param (
@@ -20,7 +21,7 @@ function Initialize-GitHub {
     )
     process {
 		switch ($PSBoundParameters.Keys) {
-			Credential { $GitHub.Credential = $Credential }
+			Credential { $Global:CiscoPowerTools.GitHub.Credential = $Credential }
 		}
 
 	}
@@ -37,16 +38,15 @@ function Invoke-GitHub {
 		[hashtable]$PsBP=@{}
     )
 
-	$Conf  = $GitHub
+	$ToIgnore = $GitHubConf.CommonParameters + "GetAll"
+	$TypeName = "GitHub_" + ( $Function -replace "/({.*?\}/?)?","_"   )
 
-	if (!$Conf.Credential) {
+	if (!$GitHubConf.Credential) {
 		Write-host 'No Credential found for GitHub API, please run :'
 		Write-host ' Initialize-GitHub $Credential'
 		write-host 'To inform the tool which credential are going to get used. $Credential is a PsCredential Object'
 		return
 	}
-
-	$ToIgnore = $Conf:CommonParameters + "GetAll"
 
 	# Transforming PsBoundParameters to API command
 	$Function = ($Function -split "/" | % {
@@ -60,18 +60,19 @@ function Invoke-GitHub {
     # Setting Header
     $RestM = @{
         Method		  = "Get"
-        Uri			  = ("https://$($conf.BaseURL)/" + $Function )
+        Uri			  = ("https://$($GitHubConf.BaseURL)" + $Function )
 		Headers		  = @{
 			"Content-Type" = "application/vnd.github+json"
-			"Authorization" = "Bearer $($Conf.Credential.GetNetworkCredential().Password)"
+			"Authorization" = "Bearer $($GitHubConf.Credential.GetNetworkCredential().Password)"
 		}
     }
 
 	# Determining who called me and which Method to use
 	$CalledBy = (Get-PSCallStack)[1].command
 	switch -regex ($CalledBy) {
-		"^Remove-"        		 { $RestM["method"] = "DELETE" 	}
-		"^(add|new|Export)-"     { $RestM["method"] = "POST"		}
+		"^Remove-"        		 	{ $RestM["method"] = "DELETE" 	}
+		"^(add|new|Export|start)-"  { $RestM["method"] = "POST"	}
+		"^(Disable)-"     			{ $RestM["method"] = "PUT"	}
 	}
 
 	# Preparaing items
@@ -81,14 +82,14 @@ function Invoke-GitHub {
 
 	# Managing incoming Data
 	$Query = @()
-	$Body  = @()
+	$Body  = @{}
 	foreach ($Key in @($PsBP.keys | ? { $_ -notin $ToIgnore })) {
 		if ($RestM["method"] -match "GET|DELETE") {
 			if (!($GetAll -and $key -in "page","per_page")) {
 				$Query += ("$key=" + $PsBP[$key])
 			}
 		} else {
-			$Body += $PsBP[$key]
+			$Body[$key] = $PsBP[$key]
 		}
 	}
 
@@ -99,7 +100,7 @@ function Invoke-GitHub {
 	}
 
 	if ($Body.count) {
-		# TBD
+		$RestM["Body"] = ($Body | ConvertTo-Json -Depth 20 -Compress)
 	}
 
 
@@ -118,13 +119,32 @@ function Invoke-GitHub {
 		if ($RestM["Body"]) { Write-verbose $RestM["Body"] }
 
 		# Running the Local Command
-		$LR = Invoke-RestMethod @RestM
-		if ($GetAll -and $LR.total_count) {
-			if (!$PropToExpand ) {
-				$PropToExpand = $LR.psobject.members | ? {
-					$_.MemberType -like "NoteProperty" -and $_.name -notlike "total_count"
-				} | select -ExpandProperty name
+		if ($RestM.Uri -match "/zip$") {
+			$WR = Invoke-WebRequest @RestM
+			$inputStream = [System.IO.MemoryStream]::new($Wr.Content)
+			$zipArchive = [System.IO.Compression.ZipArchive]::new($inputStream, [System.IO.Compression.ZipArchiveMode]::Read)
+			$LR = foreach ($entry in $zipArchive.Entries) {
+				$entryStream = $entry.Open()
+				$streamReader = [System.IO.StreamReader]::new($entryStream)
+				$fileContent = $streamReader.ReadToEnd()
+				[PSCustomObject]@{
+				    FileName = $entry.FullName
+				    Content  = $fileContent
+				}
+				$streamReader.Close()
+				$entryStream.Close()
 			}
+		} else {
+			$LR = Invoke-RestMethod @RestM
+		}
+
+		if (!$PropToExpand -and $LR.total_count) {
+			$PropToExpand = $LR.psobject.members | ? {
+				$_.MemberType -like "NoteProperty" -and $_.name -notlike "total_count"
+			} | select -ExpandProperty name
+		}
+
+		if ($GetAll -and $LR.total_count) {
 			if ($PropToExpand) {
 				$Result += $LR."$PropToExpand"
 				$Page ++
@@ -132,10 +152,16 @@ function Invoke-GitHub {
 				$GetAll = $false
 				$Result = $LR
 			}
+		} elseif ($PropToExpand) {
+			$Result = $LR."$PropToExpand"
 		} else {
 			$Result = $LR
 		}
+		# Write-host "page : $Page | GetAll : $Getall | prop To Exp : $PropToExpand | total $($LR.total_count)"
 	} until ( !$GetAll -or (($Page - 1) * $per_page ) -ge $LR.total_count)
+	if ($Result) {
+		$Result | % { $_.psobject.typenames.insert(0,$TypeName) }
+	}
 	return $Result
 }
 Export-ModuleMember Invoke-GitHub

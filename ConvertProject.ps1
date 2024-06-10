@@ -1,17 +1,17 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory,Position=0)][string]$ProjectName,
-    [hashtable]$LastFunctionToVerb,
+    [hashtable]$LastNounToVern,
     [hashtable]$FunctionRename,
     [hashtable]$AdditionalParameters,
+    [hashtable]$DescriptionToVerb,
     [String]$OutPath
 
 )
-# $ProjectName = "GitHub"
 $error.clear()
 
 ###############
-# Working on initial path and json file
+# Working on initial path and Loading the json file
 ###############
 $ScriptPath  = split-path -parent $MyInvocation.MyCommand.Definition
 $JsonPath    = $ScriptPath + "\Projects\$ProjectName.json"
@@ -27,39 +27,14 @@ if (!(test-path $JsonPath)) {
 }
 
 $Open =  get-content $JsonPath | ConvertFrom-Json -Depth 50 -AsHashtable
-
-# Depending on the last word of a function, we will change the verb on Phase 1
-$LastFunctionToVerb = @{
-    disable    = "Disable"
-    enable     = "Enable"
+if (!$Open) {
+    Write-Host "Unable to ConvertFrom-Json the file $JsonPath" -ForegroundColor red
+    return
 }
 
-$FunctionRename = @{
-    "New-GitHubReposActionsWorkflowsDispatches"   = "Start-GitHubReposActionsWorkflows"
-}
-
-# This will add the additional switch GetAll if the parameter page exists in the funtion
-$AdditionalParameters = @{
-    page = @{ GetAll = @{ Type = "Switch"  ; Parameter = @() }}
-}
-
-###################
-# None costumable variables
-###################
-# Allows to switch the Verb based on the last word of the function
-$DescriptionToVerb = @{
-    get = @{
-        search = "Find"
-    }
-    post = @{
-        Check = "Test"
-        search = "Search"
-        delete = "Remove"
-    }
-}
 
 ###########################################
-# Replacing all refs to the target values
+# Recursive function to replace all references to the target values
 ###########################################
 function Replace-References {
     param( [string[]]$kpath )
@@ -100,7 +75,9 @@ function Replace-References {
 
 Replace-References paths
 
-
+###########################################
+# Interative function that replaces schema references to its definition
+###########################################
 $Open.paths.psbase.keys | % {
     $Open.paths[$_].psbase.keys | % {
         if ($Open.paths[$_].psbase.keys -like "schema") {
@@ -124,7 +101,6 @@ foreach ($Key in $Open.paths.psbase.keys) {
                         $Schema = $Target["requestBody"]["content"]["application/json"]["schema"]
                         if ($schema.containskey("properties")) {
                             foreach ($prop in $schema.properties.psbase.keys) {
-                                Write-host Schema : $prop
                                 $NewParam = [ordered]@{}
                                 $NewParam["name"] = "$Prop"
                                 $NewParam["description"] = $schema.properties[$Prop]["description"]
@@ -271,9 +247,24 @@ Function Convert-DataSchemaToParameters {
 ###############
 # Other Initial parameters
 ###############
-
-$InitialTrim = Get-LongestCommonString $Open.paths.keys
+# $InitialTrim = Get-LongestCommonString $Open.paths.keys
 $s = " " * 4
+
+###################
+# None costumable variables
+###################
+# Allows to switch the Verb based on the last word of the function
+$DescriptionToVerb = @{
+    get = @{
+        search = "Find"
+    }
+    post = @{
+        Check  = "Test"
+        search = "Search"
+        delete = "Remove"
+    }
+}
+
 
 # Aligns the Rest Method to a Powershell Verb
 $MethodToVerb = @{
@@ -293,7 +284,8 @@ $FunctionToVerb     = @{}
 
 $ObjectTypeConversion = @{
     "string"  = "String"
-    "integer" = "Int"
+    "integer" = "BigInt"
+    "number"  = "BigInt"
     "boolean" = "Switch"
     "file"    = "System.IO.FileInfo"
     "object"  = "HashTable"
@@ -310,32 +302,33 @@ Write-Host Phase 1 : converting OpenApi to a Hashtable -ForegroundColor green
 $AllFunctions = @{}
 Foreach ($MKey in (@($open.paths.keys) | sort)) {
 
-    # Building the Noun
+    # Building the Noun and LastNoun
     $Noun = $MKey -replace "^/|/\{.*?\}|_|-|/$"
 
     $Noun = ($Noun  -split "/" | ? { $_ } | % {
         $_.substring(0,1).toupper()+$_.substring(1).tolower()
     })
 
-    $LastF =  $Noun | select -last 1
+    $LastNoun =  $Noun | select -last 1
     $OriginalNoun = $Noun -join ""
-    if ($LastF -and $LastFunctionToVerb.containskey($LastF)) {
+    if ($LastNoun -and $LastNounToVern.containskey($LastNoun)) {
         $Noun         = $Noun | select -skiplast 1
     }
     $Noun = $Noun -join "" # -replace $toIgnore
+
 
     if ($open.paths[$MKey].ContainsKey("parameters")) {
         Convert-Parameter -OpenApi $open.paths[$MKey]["parameters"]
     }
 
-    foreach ($Method in (@($open.paths[$MKey].keys) | ? { $_ -in $(@($MethodToVerb.keys)) } | sort)) {
+    foreach ($Method in (@($open.paths[$MKey].psbase.keys) | ? { $_ -in $(@($MethodToVerb.keys)) } | sort)) {
         # Building the Verb
         $LocalNoun = $Noun
         $Verb      = $MethodToVerb[$Method]
 
-        if ($LastF -and $LastFunctionToVerb.containskey($LastF)) {
-            Write-host " > LastFunctionToVerb [$MKey] $Verb-$ProjectName$OriginalNoun > $($LastFunctionToVerb[$LastF])-$ProjectName$LocalNoun"
-            $Verb = $LastFunctionToVerb[$LastF]
+        if ($LastNoun -and $LastNounToVern.containskey($LastNoun)) {
+            Write-host " > LastNounToVern [$MKey] $Verb-$ProjectName$OriginalNoun > $($LastNounToVern[$LastNoun])-$ProjectName$LocalNoun"
+            $Verb = $LastNounToVern[$LastNoun]
         } else {
             $LocalNoun = $OriginalNoun
         }
@@ -370,8 +363,7 @@ Foreach ($MKey in (@($open.paths.keys) | sort)) {
             $Parameters["Body"]["type"] = "HashTable"
         }
 
-        # Target
-        $Target = $MKey -replace "^$InitialTrim"
+        $Target = "$MKey"
         $FunctionName = "$Verb-$ProjectName$LocalNoun"
         if ($FunctionRename.containskey($FunctionName)) {
             write-host " > FunctionRename [$Mkey] $FunctionName > $($FunctionRename[$FunctionName])"
@@ -379,13 +371,13 @@ Foreach ($MKey in (@($open.paths.keys) | sort)) {
         }
 
         if ($AllFunctions.containskey( $FunctionName)) {
-            if($AllFunctions[ $FunctionName].containskey($Target)) {
+            if($AllFunctions[$FunctionName].containskey($Target)) {
                 Write-host duplicated function found $MKey $LocalNoun -ForegroundColor yellow
             } else {
-                $AllFunctions[ $FunctionName].add($Target, $Parameters)
+                $AllFunctions[$FunctionName].add($Target, $Parameters)
             }
         } else {
-            $AllFunctions[ $FunctionName] = @{ "$Target" = $Parameters }
+            $AllFunctions[$FunctionName] = @{ "$Target" = $Parameters }
         }
     }
 }
@@ -404,22 +396,14 @@ foreach ($F in $AllFunctions.psbase.keys) {
         if ($f -like "Get-GitHubReposActionsWorkflows") {
             Write-host " $F InAllFunctions : $($InAllFunctions -join ',') || $LGS"
         }
-        # $InAllFunctions += ($LGS -split "/" | ? { $_ -match "{" }) -replace "{|}"
-        # $InAllFunctions = $InAllFunctions | select -unique
-        # if ($f -like "Get-GitHubReposActionsWorkflows") {
-        #     Write-host " $F InAllFunctions : $($InAllFunctions -join ',')"
-        # }
 
-        foreach ($K in @($AllFunctions[$F].keys)) {
+        foreach ($K in @($AllFunctions[$F].psbase.keys)) {
             if ($k -like $Lgs) {
                 $FunctionPSN[$F][$k] = "Search"
             } else {
                 $FunctionPSN[$F][$k] = $k.Substring($Lgs.length) -replace "{|}|/"
             }
-            $PSN_ToAdd = @($AllFunctions[$F][$k].keys) | ? { $_ -notin $InAllFunctions }
-            if ($f -like "Get-GitHubReposActionsWorkflows") {
-                Write-host " ToChan : $($PSN_ToAdd -join ',')"
-            }
+            $PSN_ToAdd = @($AllFunctions[$F][$k].psbase.keys) | ? { $_ -notin $InAllFunctions }
 
             # Adding Extra parameters if wanted
             @($AdditionalParameters.keys) | ? { $AllFunctions[$F][$K].containskey($_) } | % {
@@ -459,17 +443,28 @@ foreach ($F in $AllFunctions.psbase.keys) {
         }
     }
 
-    $InAllFunctions = $AllFunctions[$F].values.keys | group | ? { $_.count -like $Multiple } | select -ExpandProperty Name
+    $InAllFunctions = $AllFunctions[$F].values.keys | group | ? { $_.count -like  $AllFunctions[$F].count       } | select -ExpandProperty Name
 
     $AllParams = @()
     foreach ($p in $UniqueP.psbase.keys) {
         $String = ""
-        $MPS = $false ; $LT = $null ; $MP = $false
+        $MPS = $false ; $LT = $null ; $IAF = $InAllFunctions -contains "$p"
+        # if ($F -like 'Get-GitHubReposActionsArtifacts') {
+        #     Write-host "$F|$p|$IAF ... $($InAllFunctions -join ',')" -ForegroundColor yellow
+        # }
         foreach ($T in ($UniqueP[$p])) {
             # $Types | % { $ShortT = $ShortT -replace ("^$ShortRemove") }
-            if ( $AllFunctions[$F][$T][$p].containskey("Parameter") -and !$MP) {
-                $String += "[Parameter(" +  ($AllFunctions[$F][$T][$p]["Parameter"] -join ",") + ")]"
-                $MP = $true
+            # if ($F -like 'Get-GitHubReposActionsArtifacts') {
+            #     Write-host " > $T|$IAF" -ForegroundColor blue
+            # }
+            if ( $AllFunctions[$F][$T][$p].containskey("Parameter")) {
+                if ($InAllFunctions -notcontains $p) {
+                    if ($IAF) { $String += "`n" + $s*2 } else { $IAF = $true }
+                    $String += "[Parameter(" +  ($AllFunctions[$F][$T][$p]["Parameter"] -join ",") + ")]"
+                } elseif ($IAF) {
+                    $String += "[Parameter(" +  ($AllFunctions[$F][$T][$p]["Parameter"] -join ",") + ")]"
+                    $IAF = $false
+                }
             }
 
             if ( $AllFunctions[$F][$T][$p].containskey("ValidateSet") -and !$MPS) {
