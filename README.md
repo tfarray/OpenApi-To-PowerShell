@@ -69,3 +69,10 @@ You will find in the examples folder some examples containing :
 
 Yes, the main file has to be manually buit, this function will come. At the moment, you need to copy paste / adapt to your need what is there
 
+# Credential examples
+* Github
+  * Generate a token : https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
+  * Store it in a credential object where the username can be anything, and the password is the token value, please check below example
+    * `$Cred = Get-Credential -Message "Please Enter your github token now" -UserName Anything`
+    * `Initialize-GitHub -credential $Cred`
+  * You can thereafter run any command you like
