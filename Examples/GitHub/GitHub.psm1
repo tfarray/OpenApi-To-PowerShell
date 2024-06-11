@@ -21,7 +21,7 @@ function Initialize-GitHub {
     )
     process {
 		switch ($PSBoundParameters.Keys) {
-			Credential { $Global:CiscoPowerTools.GitHub.Credential = $Credential }
+			Credential { $GitHubConf.Credential = $Credential }
 		}
 
 	}

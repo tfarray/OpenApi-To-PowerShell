@@ -1,35 +1,68 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory,Position=0)][string]$ProjectName,
-    [hashtable]$LastNounToVern,
-    [hashtable]$FunctionRename,
-    [hashtable]$AdditionalParameters,
-    [hashtable]$DescriptionToVerb,
+    [switch]$GenerateMainModule,
+    [switch]$Force,
+    [hashtable]$LastNounToVern = @{},
+    [hashtable]$FunctionRename = @{},
+    [hashtable]$AdditionalParameters = @{},
+    [hashtable]$DescriptionToVerb = @{},
     [String]$OutPath
 
 )
 $error.clear()
 
+
 ###############
 # Working on initial path and Loading the json file
 ###############
-$ScriptPath  = split-path -parent $MyInvocation.MyCommand.Definition
-$JsonPath    = $ScriptPath + "\Projects\$ProjectName.json"
+$ScriptPath   = split-path -parent $MyInvocation.MyCommand.Definition
+$Files = @{
+    JsonPath     = $ScriptPath + "\Projects\$ProjectName.json"
+    TemplateFile = $ScriptPath + "\Template\Template.psm1"
+    psm1File     = $ScriptPath + "\Output\$ProjectName.psm1"
+    psd1File     = $ScriptPath + "\Output\$ProjectName.psd1"
+    Output       = $ScriptPath + "\Output\$ProjectName.ps1"
+}
+
 if ($OutPath) {
-    $Output      = ($OutPath + "\$ProjectName.ps1") -replace  "\\\\","\"
-} else {
-    $Output      = $ScriptPath + "\Output\$ProjectName.ps1"
+    $Files.Output      = ($OutPath + "\$ProjectName.ps1") -replace  "\\\\","\"
 }
 
-if (!(test-path $JsonPath)) {
-    Write-Host "The file $JsonPath does not exist" -ForegroundColor red
+if (!(test-path $Files.JsonPath)) {
+    Write-Host "The file $($Files.JsonPath) does not exist" -ForegroundColor red
     return
 }
 
-$Open =  get-content $JsonPath | ConvertFrom-Json -Depth 50 -AsHashtable
+$Open =  get-content $Files.JsonPath | ConvertFrom-Json -Depth 50 -AsHashtable
 if (!$Open) {
-    Write-Host "Unable to ConvertFrom-Json the file $JsonPath" -ForegroundColor red
+    Write-Host "Unable to ConvertFrom-Json the file $($Files.JsonPath)" -ForegroundColor red
     return
+}
+
+
+
+###############
+# Generating main module file - if requested
+###############
+
+if ($GenerateMainModule -and !$force) {
+    if (test-path $files.psm1File) {
+        $R = Read-Host "The file $TemplateFile exists, if you type ""yes"" the file will be overwritten. Any other command will exit the script. Type ""Yes"" to rebuild the existing file"
+        if ($R -notlike "yes") { return }
+    }
+
+    $psm1 = Get-content  $files.TemplateFile
+    $URLInfo = ($open.servers | ? { $_.containskey("url") } )
+    $MainUrl = $URLInfo.url -replace "^https?://"
+    $MainProtocol =  $URLInfo.url -replace "://.*"
+    $psm1 = $psm1 -replace "!Project!",$ProjectName
+    $psm1 = $psm1 -replace "!MainURL!",$MainUrl
+    $psm1 = $psm1 -replace "!Protocol!",$MainProtocol
+    $psm1 | out-file  $files.psm1File -force
+
+    if (test-path $files.psd1File) { remove-item $files.psd1File -force | out-null }
+    New-ModuleManifest -Path $files.psd1File -Author OpenApi-To-PowerShell -NestedModules "$ProjectName.ps1" -CmdletsToExport * -FunctionsToExport * -VariablesToExport * -AliasesToExport *
 }
 
 
@@ -89,9 +122,9 @@ $Open.paths.psbase.keys | % {
 ###########################################
 # Replacing entries of type "requestBody"
 ###########################################
-$Key = '/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches'
-$Method = 'post'
-foreach ($Key in $Open.paths.psbase.keys) {
+# $Key = '/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches'
+# $Method = 'post'
+foreach ($Key in @($Open.paths.psbase.keys)) {
     foreach ($Method in $Open.paths[$key].psbase.keys) {
         $Target = $Open.paths[$key][$Method]
         if ($Target.containsKey("requestBody")) {
@@ -380,6 +413,7 @@ Foreach ($MKey in (@($open.paths.keys) | sort)) {
             $AllFunctions[$FunctionName] = @{ "$Target" = $Parameters }
         }
     }
+    if ($Error) { write-host $MKey $FunctionRename ; return }
 }
 
 ###########
@@ -516,8 +550,8 @@ if ($SchemaConversion.count) {
 ###########
 Write-Host Phase 5 : Exporting the module -foregroundcolor green
 
-if ($Output) {
-    $Module -join "`n"  | out-file $Output
+if ($Files.Output) {
+    $Module -join "`n"  | out-file $Files.Output
 }
 
 

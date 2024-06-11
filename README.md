@@ -4,26 +4,30 @@ I couldn't find a convertor that was easy to use, and generated code that wasn't
 Requirements :
 * Powershell 6 or 7
 
-# Step 1 : Create the .ps1 file
-Note : The `.ps1` file is meant to be volatile. You should try not to make any modification in it. The idea is that if a new version of the API comes out, you can simply run the instruction again to update it.
-* If you have a `.yml` file, convert it to a `.json` file. Many online convertors exist.
-* copy the `.json` file to the *Projects* Directory, and name the file the exact name of your project
-* Run the command `ConvertProject.ps1 MyProjectName` (which should also be the name of the `.json` file)
-* Find the `.ps1` file in the *Output* folder
+# Creating a module in few steps
+* Copy your `myproject.json` open api specification file into the `Projects` Folder
+* Run the command `ConvertProject.ps1 MyProjectName -GenerateMainModule`
+* Retrieve your module in the Output folder :
+  * `MyProject.ps1` : The volatile file that contains all the specifications
+  * `MyProject.ps1m` : The module file that you will want to improve
+  * `MyProject.ps1d` : The manifest file that is required
 
-# Step 2 : Create the .ps1m (and .ps1d) files
-As the `.ps1` file contains all the commands that you will be doing, the `.ps1m` should contain 2 functions that will do all the API calls :
-* `invoke-MyProject`
-* `initialize-MyProject`
-This code is not yet generated, and you will need to get inspired by the examples that are in this repository.
-Only once, you will need to create a manifest file. There is a built in command that will do it for you, example :
-  * `New-ModuleManifest -Path E:\OpenApi-To-PowerShell\Examples\GitHub\GitHub.psd1 -Author OpenApi-To-PowerShell -NestedModules GitHub.ps1 -CmdletsToExport * -FunctionsToExport * -VariablesToExport * -AliasesToExport *`
+Almost done, you need to edit the `MyProject.ps1m` and sort out the authentication. This is not yet automated. The generated file will be ready in case you are using a token, but there are many different authentication mechanism out there, and you may have to adapt the module file.
 
-# How to use the new module ?
+# Information about how to work with those files
+* The `.ps1` file is meant to be volatile. You should try not to make any modification in it. The idea is that if a new version of the API comes out, you can simply run this script again, and done ! It's updated.
+* If you have an Open API `.yml` file, you will need to convert it to a `.json` file. Many online convertors exist. Powershell does not have built-in conversion tools.
+* The `.json` file in the *Projects*  need to have the same name as your project
+* All files you need are in the *Output* folder
+
+# About authentication
+There are so many different authentication mechanism out there, that best is have you sort this out.
+You will need to modify your psm1 file until it works. Please remember that after modifying a module file, you need to reload the module with a -force swith `import-module MyProject -force`
+
+# How to use the generated module ?
 * Load the module `import-module mymodule`
 * Load your credentials to the module : `initialize-MyProject -Credential $Credential`
   * Where `$Credential` is a PsCredential Object
-* Done ! You should be able to use any commands
 
 # Customize your project and the output commands
 Before customizing, let's agree on how we name things.
@@ -49,10 +53,9 @@ The converter offers different switches to help you dress up your commands
 
 # This project is still at an early stage
 At the moment, this project will create all the functions required to convert open API projects to a list of powershell commands.
-* YES : This is not perfect, and you may encounter bug
-* YES : This does not yet automatically create module files, but just a .ps1 file which needs to be incorporated to a module
-* YES : There is not yet the invoke-PROJECT commands
-* YES : The help file is not yet generated, but this might come
+There is already a list of improvements that I can think of :
+* So many different OpenApi specifications, some may not yet be implemented
+* No help file generated, but this might come
 
 
 # Examples :
