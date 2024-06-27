@@ -17,8 +17,10 @@ $error.clear()
 # Working on initial path and Loading the json file
 ###############
 $ScriptPath   = split-path -parent $MyInvocation.MyCommand.Definition
+
+
 $Files = @{
-    JsonPath     = $ScriptPath + "\Projects\$ProjectName.json"
+    JsonPath     = $ScriptPath + "\Projects\$ProjectName*.json"
     TemplateFile = $ScriptPath + "\Template\Template.psm1"
     psm1File     = $ScriptPath + "\Output\$ProjectName.psm1"
     psd1File     = $ScriptPath + "\Output\$ProjectName.psd1"
@@ -34,8 +36,8 @@ if (!(test-path $Files.JsonPath)) {
     return
 }
 
-$Open =  get-content $Files.JsonPath | ConvertFrom-Json -Depth 50 -AsHashtable
-if (!$Open) {
+$AllOpen =  get-item $Files.JsonPath | % { $_ | get-content | ConvertFrom-Json -Depth 50 -AsHashtable }
+if (!$AllOpen) {
     Write-Host "Unable to ConvertFrom-Json the file $($Files.JsonPath)" -ForegroundColor red
     return
 }
@@ -53,7 +55,7 @@ if ($GenerateMainModule -and !$force) {
     }
 
     $psm1 = Get-content  $files.TemplateFile
-    $URLInfo = ($open.servers | ? { $_.containskey("url") } )
+    $URLInfo = ($open | % { $_.servers | ? { $_.containskey("url") } })
     $MainUrl = $URLInfo.url -replace "^https?://"
     $MainProtocol =  $URLInfo.url -replace "://.*"
     $psm1 = $psm1 -replace "!Project!",$ProjectName
@@ -106,15 +108,17 @@ function Replace-References {
     }
 }
 
-Replace-References paths
+foreach ($Open in $AllOpen) { Replace-References paths }
 
 ###########################################
 # Interative function that replaces schema references to its definition
 ###########################################
-$Open.paths.psbase.keys | % {
-    $Open.paths[$_].psbase.keys | % {
-        if ($Open.paths[$_].psbase.keys -like "schema") {
-            $Open.paths[$_].schema = $Open.paths[$_].schema -replace "^#/definitions/",""
+foreach ($Open in $AllOpen) {
+    $Open.paths.psbase.keys | % {
+        $Open.paths[$_].psbase.keys | % {
+            if ($Open.paths[$_].psbase.keys -like "schema") {
+                $Open.paths[$_].schema = $Open.paths[$_].schema -replace "^#/definitions/",""
+            }
         }
     }
 }
@@ -124,39 +128,41 @@ $Open.paths.psbase.keys | % {
 ###########################################
 # $Key = '/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches'
 # $Method = 'post'
-foreach ($Key in @($Open.paths.psbase.keys)) {
-    foreach ($Method in $Open.paths[$key].psbase.keys) {
-        $Target = $Open.paths[$key][$Method]
-        if ($Target.containsKey("requestBody")) {
-            if ($Target["requestBody"].containsKey("content")) {
-                if ($Target["requestBody"]["content"].containsKey("application/json")) {
-                    if ($Target["requestBody"]["content"]["application/json"].containsKey("schema")) {
-                        $Schema = $Target["requestBody"]["content"]["application/json"]["schema"]
-                        if ($schema.containskey("properties")) {
-                            foreach ($prop in $schema.properties.psbase.keys) {
-                                $NewParam = [ordered]@{}
-                                $NewParam["name"] = "$Prop"
-                                $NewParam["description"] = $schema.properties[$Prop]["description"]
-                                $NewParam["schema"] = @{ "Type" = $schema.properties[$Prop]["type"] }
-                                $Target["parameters"] += @($NewParam)
-                            }
-                        }
-                        if ($schema.containskey("oneOf")) {
-                            $schema.oneOf | % {
-                                foreach ($prop in $_.properties.psbase.keys) {
+foreach ($Open in $AllOpen) {
+    foreach ($Key in @($Open.paths.psbase.keys)) {
+        foreach ($Method in $Open.paths[$key].psbase.keys) {
+            $Target = $Open.paths[$key][$Method]
+            if ($Target.containsKey("requestBody")) {
+                if ($Target["requestBody"].containsKey("content")) {
+                    if ($Target["requestBody"]["content"].containsKey("application/json")) {
+                        if ($Target["requestBody"]["content"]["application/json"].containsKey("schema")) {
+                            $Schema = $Target["requestBody"]["content"]["application/json"]["schema"]
+                            if ($schema.containskey("properties")) {
+                                foreach ($prop in $schema.properties.psbase.keys) {
                                     $NewParam = [ordered]@{}
                                     $NewParam["name"] = "$Prop"
-                                    $NewParam["description"] = $_.properties[$Prop]["description"]
-                                    $NewParam["schema"] = @{ "Type" = $_.properties[$Prop]["type"] }
+                                    $NewParam["description"] = $schema.properties[$Prop]["description"]
+                                    $NewParam["schema"] = @{ "Type" = $schema.properties[$Prop]["type"] }
                                     $Target["parameters"] += @($NewParam)
+                                }
+                            }
+                            if ($schema.containskey("oneOf")) {
+                                $schema.oneOf | % {
+                                    foreach ($prop in $_.properties.psbase.keys) {
+                                        $NewParam = [ordered]@{}
+                                        $NewParam["name"] = "$Prop"
+                                        $NewParam["description"] = $_.properties[$Prop]["description"]
+                                        $NewParam["schema"] = @{ "Type" = $_.properties[$Prop]["type"] }
+                                        $Target["parameters"] += @($NewParam)
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+            # if ($Error) { write-host Key : $Key Methd : $Method ; return }
         }
-        # if ($Error) { write-host Key : $Key Methd : $Method ; return }
     }
 }
 ###############
@@ -179,6 +185,43 @@ Function Get-LongestCommonString {
     return $Ans
 }
 
+Function Convert-ParameterDetails {
+    param(
+        $PDetail
+    )
+    $Parameter = @()
+    switch (@($PDetail.psbase.keys)) {
+        required {
+            if ($PDetail["required"]) { # This is because required might be false
+                $Parameter += "Mandatory"
+                $Parameter += "Position=$Position"
+                $Position++
+            }
+        }
+        enum {
+            $Parameters[$name]["ValidateSet"] = $PDetail["enum"]
+        }
+        format {
+            $Parameters[$name]["ValidateScript"] = $ValidateScript[$PDetail["format"]]
+        }
+    }
+    if ($Parameter) {
+        $Parameters[$name]["Parameter"] += @($Parameter)
+    }
+    if ($PDetail.contains("type")) {
+        if ($PDetail.type -like "array") {
+            if ($PDetail.contains("items")) {
+                $Parameters[$name]["Type"] =  $ObjectTypeConversion[$PDetail."items"."type"] + "[]"
+            } else {
+                $Parameters[$name]["Type"] = "PsObject[]"
+            }
+        } elseif ($PDetail.contains("type") -and $PDetail.type ) {
+            $Parameters[$name]["Type"] = $ObjectTypeConversion[$PDetail."type"]
+        }
+    }
+    return $parameter
+}
+
 Function Convert-Parameter {
     param(
         $OpenApiParameters
@@ -191,40 +234,16 @@ Function Convert-Parameter {
         } else {
             $Name = $FParam.name
             $Parameters[$name] = @{}
-            $Parameter  = @()
-            switch ($FParam.psbase.keys) {
-                required {
-                    if ($FParam["required"]) {
-                        $Parameter += "Mandatory"
-                        $Parameter += "Position=$Position"
-                        $Position++
-                    }
-                }
-                enum {
-                    $Parameters[$name]["ValidateSet"] = $FParam["enum"]
-                }
-                format {
-                    $Parameters[$name]["ValidateScript"] = $ValidateScript[$FParam["format"]]
-                }
+
+            $Parameter  += Convert-ParameterDetails $FParam
+            if ($FunctionName -like "Get-GitHubissues") {
+                Write-host -ForegroundColor yellow " > [1] $FunctionName $($FParam.name) Schema : $( $Parameters[$name].keys -join ',')"
             }
-            if ($Parameter) {
-                $Parameters[$name]["Parameter"] = $Parameter
-            }
-            if ($FParam."type") {
-                $Parameters[$name]["Type"] = $ObjectTypeConversion[$FParam.type]
-            }
-            if ($FParam."schema"."type") {
-                if ($FParam."schema"."type" -like "array") {
-                    if ( $FParam."schema"."items"."type" ) {
-                        try {
-                        $Parameters[$name]["Type"] =  $ObjectTypeConversion[$FParam."schema"."items"."type"] + "[]"
-                        } catch {
-                        Write-host ParamConv $MKey $Method $name "(ignored)" -ForegroundColor yellow
-                        }
-                    }
-                } else {
-                    # Write-host Type 2 $FParam."schema"."type"
-                    $Parameters[$name]["Type"] = $ObjectTypeConversion[$FParam."schema"."type"]
+
+            if ( $FParam.contains("schema")) {
+                $Parameter  += Convert-ParameterDetails $FParam."schema"
+                if ($FunctionName -like "Get-GitHubissues") {
+                    Write-host -ForegroundColor yellow "  > [2] $FunctionName $($FParam.name) Schema : $( $Parameters[$name].keys -join ',')"
                 }
             }
         }
@@ -248,7 +267,7 @@ Function Convert-DataSchemaToParameters {
         }
         if ($FParam.items.type) {
             $Parameters[$name]["Type"] =  $ObjectTypeConversion[$FParam.items.type]
-            write-host "$name >" $Parameters[$name]["Type"]
+            # write-host "$name >" $Parameters[$name]["Type"]
         } else {
             $Parameters[$name]["Type"] = "PsObject"
         }
@@ -259,7 +278,7 @@ Function Convert-DataSchemaToParameters {
         switch ($FParam.psbase.keys) {
             type {
                 if ($FParam."$_" -notlike "array") {
-                    Write-host "OVER $_"
+                    # Write-host "OVER $_"
                     $Parameters[$name]["Type"] = $ObjectTypeConversion[$FParam."$_"]
                 }
             }
@@ -273,7 +292,7 @@ Function Convert-DataSchemaToParameters {
         if ($Parameter) {
             $Parameters[$name]["Parameter"] = $Parameter
         }
-        write-host "$name >" $Parameters[$name]["Type"]
+        # write-host "$name >" $Parameters[$name]["Type"]
     }
 }
 
@@ -316,12 +335,13 @@ $ValidateScript = @{
 $FunctionToVerb     = @{}
 
 $ObjectTypeConversion = @{
-    "string"  = "String"
-    "integer" = "BigInt"
-    "number"  = "BigInt"
-    "boolean" = "Switch"
-    "file"    = "System.IO.FileInfo"
-    "object"  = "HashTable"
+    "string"    = "String"
+    "integer"   = "BigInt"
+    "number"    = "BigInt"
+    "boolean"   = "Switch"
+    "file"      = "System.IO.FileInfo"
+    "object"    = "HashTable"
+    "date-time" = "DateTime"
 }
 
 $SchemaConversion = @{}
@@ -333,87 +353,98 @@ $SchemaConversion = @{}
 ###############
 Write-Host Phase 1 : converting OpenApi to a Hashtable -ForegroundColor green
 $AllFunctions = @{}
-Foreach ($MKey in (@($open.paths.keys) | sort)) {
+foreach ($Open in $AllOpen) {
+    Foreach ($MKey in (@($open.paths.psbase.keys) | sort)) {
 
-    # Building the Noun and LastNoun
-    $Noun = $MKey -replace "^/|/\{.*?\}|_|-|/$"
+        ########################################
+        # Building : Noun|LastNoun|OriginalNoun
+        ########################################
+        $Noun = $MKey -replace "^/|/\{.*?\}|_|-|/$"
 
-    $Noun = ($Noun  -split "/" | ? { $_ } | % {
-        $_.substring(0,1).toupper()+$_.substring(1).tolower()
-    })
+        $Noun = ($Noun  -split "/" | ? { $_ } | % {
+            $_.substring(0,1).toupper()+$_.substring(1).tolower()
+        })
 
-    $LastNoun =  $Noun | select -last 1
-    $OriginalNoun = $Noun -join ""
-    if ($LastNoun -and $LastNounToVern.containskey($LastNoun)) {
-        $Noun         = $Noun | select -skiplast 1
-    }
-    $Noun = $Noun -join "" # -replace $toIgnore
-
-
-    if ($open.paths[$MKey].ContainsKey("parameters")) {
-        Convert-Parameter -OpenApi $open.paths[$MKey]["parameters"]
-    }
-
-    foreach ($Method in (@($open.paths[$MKey].psbase.keys) | ? { $_ -in $(@($MethodToVerb.keys)) } | sort)) {
-        # Building the Verb
-        $LocalNoun = $Noun
-        $Verb      = $MethodToVerb[$Method]
-
+        $LastNoun =  $Noun | select -last 1
+        $OriginalNoun = $Noun -join ""
         if ($LastNoun -and $LastNounToVern.containskey($LastNoun)) {
-            Write-host " > LastNounToVern [$MKey] $Verb-$ProjectName$OriginalNoun > $($LastNounToVern[$LastNoun])-$ProjectName$LocalNoun"
-            $Verb = $LastNounToVern[$LastNoun]
-        } else {
-            $LocalNoun = $OriginalNoun
+            $Noun         = $Noun | select -skiplast 1
         }
+        $Noun = $Noun -join "" # -replace $toIgnore
 
-        if ($DescriptionToVerb.containskey($Method)) {
-            $FirstWord = $open.paths[$MKey][$Method].summary -split "\s" | select -First 1
-            if ($DescriptionToVerb[$Method].containskey($FirstWord)) {
-                Write-host " > DescriptionToVerb [$MKey] $Verb-$ProjectName$LocalNoun > $($DescriptionToVerb[$Method][$FirstWord])-$ProjectName$($LocalNoun -replace ("$Verb" + '$'))"
-                $Verb = $DescriptionToVerb[$Method][$FirstWord]
-                $LocalNoun = $LocalNoun -replace ("$Verb" + '$')
-            }
-        }
-
-        if ($FunctionToVerb.containskey($MKey)) {
-            if ($FunctionToVerb[$MKey].containskey($Method)) {
-                $Verb = $FunctionToVerb[$MKey][$Method]
-            }
-        }
+        ########################################
+        # Sorting Global Parameters for the function
+        ########################################
 
         # Building the Parameter List
-        $Parameters = @{}
-        $Position   = 0
 
-        if ($open.paths[$MKey].ContainsKey("parameters")) {
-            Convert-Parameter -OpenApi $open.paths[$MKey]["parameters"]
-        }
-        Convert-Parameter -OpenApi $open.paths[$MKey][$Method]["parameters"]
+        foreach ($Method in (@($open.paths[$MKey].psbase.keys) | ? { $_ -in $(@($MethodToVerb.keys)) } | sort)) {
+            # Building the Verb
+            $LocalNoun  = $Noun
+            $Verb       = $MethodToVerb[$Method]
 
-
-        if ($open.paths[$MKey][$Method].ContainsKey("requestBody")) {
-            $Parameters["Body"] = @{}
-            $Parameters["Body"]["type"] = "HashTable"
-        }
-
-        $Target = "$MKey"
-        $FunctionName = "$Verb-$ProjectName$LocalNoun"
-        if ($FunctionRename.containskey($FunctionName)) {
-            write-host " > FunctionRename [$Mkey] $FunctionName > $($FunctionRename[$FunctionName])"
-            $FunctionName = $FunctionRename[$FunctionName]
-        }
-
-        if ($AllFunctions.containskey( $FunctionName)) {
-            if($AllFunctions[$FunctionName].containskey($Target)) {
-                Write-host duplicated function found $MKey $LocalNoun -ForegroundColor yellow
+            if ($LastNoun -and $LastNounToVern.containskey($LastNoun)) {
+                # Write-host " > LastNounToVern [$MKey] $Verb-$ProjectName$OriginalNoun > $($LastNounToVern[$LastNoun])-$ProjectName$LocalNoun"
+                $Verb = $LastNounToVern[$LastNoun]
             } else {
-                $AllFunctions[$FunctionName].add($Target, $Parameters)
+                $LocalNoun = $OriginalNoun
             }
-        } else {
-            $AllFunctions[$FunctionName] = @{ "$Target" = $Parameters }
+
+            if ($DescriptionToVerb.containskey($Method)) {
+                $FirstWord = $open.paths[$MKey][$Method].summary -split "\s" | select -First 1
+                if ($DescriptionToVerb[$Method].containskey($FirstWord)) {
+                    # Write-host " > DescriptionToVerb [$MKey] $Verb-$ProjectName$LocalNoun > $($DescriptionToVerb[$Method][$FirstWord])-$ProjectName$($LocalNoun -replace ("$Verb" + '$'))"
+                    $Verb = $DescriptionToVerb[$Method][$FirstWord]
+                    $LocalNoun = $LocalNoun -replace ("$Verb" + '$')
+                }
+            }
+
+            if ($FunctionToVerb.containskey($MKey)) {
+                if ($FunctionToVerb[$MKey].containskey($Method)) {
+                    $Verb = $FunctionToVerb[$MKey][$Method]
+                }
+            }
+
+            if ($open.paths[$MKey][$Method].ContainsKey("requestBody")) {
+                $Parameters["Body"] = @{}
+                $Parameters["Body"]["type"] = "HashTable"
+            }
+
+            $Target = "$MKey"
+            $FunctionName = "$Verb-$ProjectName$LocalNoun"
+            if ($FunctionRename.containskey($FunctionName)) {
+                # write-host " > FunctionRename [$Mkey] $FunctionName > $($FunctionRename[$FunctionName])"
+                $FunctionName = $FunctionRename[$FunctionName]
+            }
+
+            ###########################
+            # Computing parameters of the function
+            ###########################
+            $Parameters = @{}
+            $Position   = 0
+            $Parameter  = @()
+
+            if ($open.paths[$MKey].ContainsKey("parameters")) {
+                Convert-Parameter -OpenApi $open.paths[$MKey]["parameters"]
+            }
+            Convert-Parameter -OpenApi $open.paths[$MKey][$Method]["parameters"]
+            if ($FunctionName -like "Get-GitHubissues") {
+                Write-host -ForegroundColor Cyan "  > $FunctionName $($FParam.name) Schema : $( $Parameters[$name].keys -join ',')"
+            }
+
+
+            if ($AllFunctions.containskey( $FunctionName)) {
+                if($AllFunctions[$FunctionName].containskey($Target)) {
+                    Write-host duplicated function found $MKey $LocalNoun -ForegroundColor yellow
+                } else {
+                    $AllFunctions[$FunctionName].add($Target, $Parameters)
+                }
+            } else {
+                $AllFunctions[$FunctionName] = @{ "$Target" = $Parameters }
+            }
         }
+        if ($Error) { write-host $MKey $FunctionRename ; return }
     }
-    if ($Error) { write-host $MKey $FunctionRename ; return }
 }
 
 ###########
@@ -428,7 +459,7 @@ foreach ($F in $AllFunctions.psbase.keys) {
         $LGS = (Get-LongestCommonString $AllFunctions[$F].psbase.keys)
         $InAllFunctions = $AllFunctions[$F].values.keys | group | ? { $_.count -like $Multiple } | select -ExpandProperty Name
         if ($f -like "Get-GitHubReposActionsWorkflows") {
-            Write-host " $F InAllFunctions : $($InAllFunctions -join ',') || $LGS"
+            # Write-host " $F InAllFunctions : $($InAllFunctions -join ',') || $LGS"
         }
 
         foreach ($K in @($AllFunctions[$F].psbase.keys)) {
@@ -448,7 +479,7 @@ foreach ($F in $AllFunctions.psbase.keys) {
 
             # Setting ParameterSetName
             foreach ($P in $PSN_ToAdd) {
-                Write-host "$F|$k|$p"
+                # Write-host "$F|$k|$p"
                 $AllFunctions[$F][$k][$P]["Parameter"] += "ParameterSetName='$($FunctionPSN[$F][$k])'"
             }
         }
@@ -502,6 +533,7 @@ foreach ($F in $AllFunctions.psbase.keys) {
             }
 
             if ( $AllFunctions[$F][$T][$p].containskey("ValidateSet") -and !$MPS) {
+                if ($F -like "Get-GitHubissues") { Write-host TESQFDQSDFQSDF : $t $p}
                 $String += "[ValidateSet('$($AllFunctions[$F][$T][$p]["ValidateSet"] -join ''',''')')]"
                 $MPS = $true
             }
@@ -548,7 +580,7 @@ if ($SchemaConversion.count) {
 ###########
 # Converting the module to a .ps1 file
 ###########
-Write-Host Phase 5 : Exporting the module -foregroundcolor green
+Write-Host Phase 5 : Exporting the module to $Files.Output -foregroundcolor green
 
 if ($Files.Output) {
     $Module -join "`n"  | out-file $Files.Output

@@ -8,11 +8,11 @@ Requirements :
 * Copy your `myproject.json` open api specification file into the `Projects` Folder
 * Run the command `ConvertProject.ps1 MyProjectName -GenerateMainModule`
 * Retrieve your module in the Output folder :
-  * `MyProject.ps1` : The volatile file that contains all the specifications
-  * `MyProject.ps1m` : The module file that you will want to improve
+  * `MyProject.ps1` : The volatile file that contains all the specifications. You shouldn't modify this one
+  * `MyProject.ps1m` : The module file that you will want to modify
   * `MyProject.ps1d` : The manifest file that is required
 
-Almost done, you need to edit the `MyProject.ps1m` and sort out the authentication. This is not yet automated. The generated file will be ready in case you are using a token, but there are many different authentication mechanism out there, and you may have to adapt the module file.
+Almost done, you need to edit the `MyProject.ps1m` and sort out the authentication. This is not yet automated. Initially, the module will work if the API is using bearer token. You will need to change it if it is using another authenticating mechanism.
 
 # Information about how to work with those files
 * The `.ps1` file is meant to be volatile. You should try not to make any modification in it. The idea is that if a new version of the API comes out, you can simply run this script again, and done ! It's updated.

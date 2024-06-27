@@ -54,7 +54,7 @@ function Invoke-!Project! {
         Method		  = "Get"
         Uri			  = ("!Protocol!://$($!Project!Conf.BaseURL)" + $Function )
 		Headers		  = @{
-			# Example : "Authorization" = "Bearer $($!Project!Conf.Credential.GetNetworkCredential().Password)"
+			"Authorization" = "Bearer $($!Project!Conf.Credential.GetNetworkCredential().Password)"
 		}
     }
 
