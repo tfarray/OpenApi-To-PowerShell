@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory,Position=0)][string]$ProjectName,
+    [switch]$MultipleFiles,
     [switch]$GenerateMainModule,
     [switch]$Force,
     [hashtable]$LastNounToVern = @{},
@@ -20,11 +21,14 @@ $ScriptPath   = split-path -parent $MyInvocation.MyCommand.Definition
 
 
 $Files = @{
-    JsonPath     = $ScriptPath + "\Projects\$ProjectName*.json"
+    JsonPath     = $ScriptPath + "\Projects\$ProjectName.json"
     TemplateFile = $ScriptPath + "\Template\Template.psm1"
     psm1File     = $ScriptPath + "\Output\$ProjectName.psm1"
     psd1File     = $ScriptPath + "\Output\$ProjectName.psd1"
     Output       = $ScriptPath + "\Output\$ProjectName.ps1"
+}
+if (MultipleFiles) {
+    $Files.JsonPath =$ScriptPath + "\Projects\$ProjectName*.json"
 }
 
 if ($OutPath) {
