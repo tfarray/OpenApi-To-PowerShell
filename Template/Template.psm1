@@ -1,22 +1,23 @@
 
-!Project!Conf = @{
-    BaseURL       = "!MainURL!"
+# This data is required for the module to work
+# It stores information, such as the credential that is going to be used
+$!Project!_Conf = @{
+    EndPoint      = "!MainEndPoint!"
     credential    = $null
-    CommonParameters = ([System.Management.Automation.PSCmdlet]::CommonParameters + [System.Management.Automation.PSCmdlet]::OptionalCommonParameters) + "Force"
+    CommonParameters = ([System.Management.Automation.PSCmdlet]::CommonParameters + [System.Management.Automation.PSCmdlet]::OptionalCommonParameters)
 }
 
-
-
+# This command is requried to, at least, set the credential
 function Initialize-!Project! {
     [CmdletBinding()]
 	param (
-        [pscredential]$Credential
+		[parameter(Position = 0)][pscredential]$Credential,
+		[ValidateSet('!EndPoints!')][string]$EndPoint
     )
     process {
 		switch ($PSBoundParameters.Keys) {
-			Credential { $!Project!.Credential = $Credential }
+			Default { $!Project!_Conf[$_] = $PSBoundParameters[$_] }
 		}
-
 	}
 }
 Export-ModuleMember Initialize-!Project!
@@ -26,21 +27,24 @@ function Invoke-!Project! {
 	param (
         [parameter(Mandatory,Position = 0)][string]$Function,
         [string[]]$Query=@(),
-		$Method,
-		$Json,
+		$Method, # this variable can be used to manually force a method
+		$Json,   # this variable can be used to manually  simulate a json payload
 		[hashtable]$PsBP=@{}
     )
 
-	$ToIgnore = $!Project!Conf.CommonParameters
-	$TypeName = "!Project!_" + ( $Function -replace "/({.*?\}/?)?","_"   )
+	# Some inputs are not to be parsed by the command
+	$Conf = $!Project!_Conf # Small Shortcut that makes the code easier to write
+	$ToIgnore = $Conf.CommonParameters
 
-	if (!$!Project!Conf.Credential) {
+	# Verifying credentials, we consider the are mandatory
+	if (!$Conf.Credential) {
 		Write-host 'No Credential found for !Project! API, please run :'
 		Write-host ' Initialize-!Project! $Credential'
 		write-host 'To inform the tool which credential are going to get used. $Credential is a PsCredential Object'
 		return
 	}
 
+	# we want to make sure that {keys} in the URL are not considered as query inputs
 	$Function = ($Function -split "/" | % {
 		if ($_ -match "^{.*}$") {
 			$key = $_ -replace "{|}"
@@ -49,16 +53,57 @@ function Invoke-!Project! {
 		} else { $_ }
 	}) -join "/"
 
-    # Setting Header
+	############
+	# Uncomment this if the API is using a generated token
+	############
+	# if ($Conf.token -and $Conf.token.expires -lt (get-date)) {
+	# 	write-verbose "Token is still valid"
+	# } else {
+	# 	write-verbose "Getting a new token"
+	# 	$WebR = @{
+	#		# You will need to specify here your token endpoint
+	# 		URI = TO BE SPECIFIED BY YOU
+	# 		Credential = $Conf.credential
+	#       # Headers may change depending on the token endpoint specifications
+	# 		header = @{
+	# 			'Content-Type' = "application/x-www-form-urlencoded"
+	# 			'Accept' = "application/json"
+	# 		}
+	#       # SAME HERE, the body may change depending on the token endpoint specifications
+	# 		Body = @{ "grant_type" = "client_credentials" } | convertto-json
+	# 	}
+	# 		$Token = Invoke-RestMethod @WebR
+	# 	if ($Token) {
+	# 		$Conf.token = $Token
+	# 		$Conf.token["expires"] = (get-date).AddSeconds($Token.expires_in)
+	#    	$Headers = @{
+	# 			'Authorization' = "$($Conf.token.token_type) $($Conf.token.access_token)"
+	# 			'accept' = 'application/json'
+	# 		}
+	# 	} else  { return }
+	# }
+
+	############
+	# Comment this if you are not using Basic Authentication
+	############
+	$Encoding = "UTF8" # You may need to change this depending on the API
+	$Encoded  =  [Convert]::ToBase64String([System.Text.Encoding]::"$Encoding".GetBytes(($Conf.credential.username + ":" + $Conf.credential.GetNetworkCredential().password)))
+	$headers =  @{
+		'Authorization' =  "Basic $Encoded"
+		'accept' = 'application/json' # this may change depending on your API
+	}
+
+
+    # Starting to build the Rest Method commands inputs
     $RestM = @{
         Method		  = "Get"
-        Uri			  = ("!Protocol!://$($!Project!Conf.BaseURL)" + $Function )
-		Headers		  = @{
-			# Example : "Authorization" = "Bearer $($!Project!Conf.Credential.GetNetworkCredential().Password)"
-		}
+        Uri			  = ("!Protocol!://$($Conf.EndPoint)" + $Function )
+		Headers		  = $headers
     }
 
-	# Determining who called me and which Method to use
+	####################
+	# Determining who called me > calculates the Method to use
+	####################
 	$CalledBy = (Get-PSCallStack)[1].command
 	switch -regex ($CalledBy) {
 		"^Remove-"        		 	{ $RestM["method"] = "DELETE" 	}
@@ -66,12 +111,9 @@ function Invoke-!Project! {
 		"^(Disable)-"     			{ $RestM["method"] = "PUT"	}
 	}
 
-	# Preparaing items
-	switch ($PSBoundParameters.keys) {
-		GetAll	{ $GetAll = $true }
-	}
-
+	####################
 	# Managing incoming Data
+	####################
 	$Query = @()
 	$Body  = @{}
 	foreach ($Key in @($PsBP.keys | ? { $_ -notin $ToIgnore })) {
@@ -82,15 +124,15 @@ function Invoke-!Project! {
 		}
 	}
 
-	# Section only if custom Json or method is used
+	# Manual inputs - used to test
 	switch ($PSBoundParameters.keys) {
 		Method	{ $RestM["method"] = $Method }
 		Json	{ $RestM["Body"]   = $JSON }
 	}
 
-
 	if ($Body.count) {
-		$RestM["Body"] = ($Body | ConvertTo-Json -Depth 20 -Compress)
+		# Note : the Depth parameter will not work on powershell 5
+		$RestM["Body"] = ($Body | ConvertTo-Json -Depth 100 -Compress)
 	}
 
 	if ($Query) { $RestM.Uri += "?" + ($Query -join "&") }
@@ -99,8 +141,22 @@ function Invoke-!Project! {
 	if ($RestM["Body"]) { Write-verbose $RestM["Body"] }
 
 	# Running the Local Command
-	$Result = Invoke-RestMethod @RestM
+	# The loop is used in case of certain API which are not stable
+	# it is not required
+	$MaxTries = 1 ; $try = 0
+	do {
+		$Failure = $false
+		try {
+			$Result = Invoke-RestMethod @RestM
+		} Catch {
+			Write-host -ForegroundColor DarkRed "Execution Error : $($_.Exception.Message)"
+			$Failure = $true
+		}
+		$try ++
+	} while ( $try -le $MaxTries -and $Failure )
 
+	# Adding a type to our commands
+	$TypeName = "!Project!_" + ( $Function -replace "/({.*?\}/?)?","_"   )
 	if ($Result) {
 		$Result | % { $_.psobject.typenames.insert(0,$TypeName) }
 	}

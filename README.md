@@ -76,3 +76,37 @@ Yes, the main file has to be manually buit, this function will come. At the mome
     * `$Cred = Get-Credential -Message "Please Enter your github token now" -UserName Anything`
     * `Initialize-GitHub -credential $Cred`
   * You can thereafter run any command you like
+
+# Real case senarios
+## Cisco Secure Endpoint API
+1. Download all the yaml file fir the v1 API from [The Cisco API reference Guide](https://developer.cisco.com/docs/secure-endpoint/auditlog/)
+2. Convert all the .yaml files to .json files
+  * You can use many  online converters
+  * Or you can install the powershell-yaml module (`install-module powershell-yaml`) and convert them this way (this will also change the name of the files by starting them with the required `AMP1`)
+    * `dir *.yaml | % { $_ | get-content |  ConvertFrom-Yaml | ConvertTo-Json -Depth 20 | out-file ("AMP1_" +  ($_.name -replace "yaml","json") )`
+3. Copy the .json files (all filenames should be starting by `AMP1` and ending with the `.json` file extension) to the **\Projects** folder
+4. All Set, you are ready to generate the module :
+```
+.\ConvertProject.ps1 -ProjectName Amp1 -MultipleFiles -AdditionalParameters  @{
+  limit = @{
+        offset = @{ Type = "BigInt"  ; Parameter = @() }
+    }
+  } -FunctionRenamePattern @{ "Amp1V1" = "Amp1" } -GenerateMainModule
+```
+  * *ProjectName* is the mandatory variable to filter the correct .json inputs
+  * *MultipleFiles* is required for this API as we have multiple json files for this API
+  * *AdditionalParameters* this API is missing some commands. In case an API function has a `limit` variable, I want to make sure the `offset` variable
+  * *FunctionRenamePattern* All the functions will start with `Amp1v1`. I don't care about the V1, so I want to remove it. This will change any  `Amp1v1` to  `Amp1`
+  * *GenerateMainModule* will generate the psm1 and psd1 files
+
+* Done ! in the \Output folder, you should now have 3 AMP1 files (ps1/psm1/psd1)
+```
+Import-module \output\Amp1.psd1
+
+# Next, tell the API which credential to use (you will be prompted for username/password, which should look like 1a2b3333cccc4444dddd/1a2b33cc-1a2b-1a2b-1a2b33cc)
+Initialize-Amp1 -Credential  (get-credential)
+
+# Done, you can now run any command such as :
+Get-Amp1Computers
+```
+* Final Note : I improved the generated API, you can find the modified ps1m file under /Examples/Amp1

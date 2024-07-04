@@ -1,14 +1,16 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName='None')]
 param(
     [Parameter(Mandatory,Position=0)][string]$ProjectName,
     [switch]$MultipleFiles,
-    [switch]$GenerateMainModule,
     [switch]$Force,
     [hashtable]$LastNounToVern = @{},
     [hashtable]$FunctionRename = @{},
+    [hashtable]$FunctionRenamePattern = @{},
     [hashtable]$AdditionalParameters = @{},
     [hashtable]$DescriptionToVerb = @{},
-    [String]$OutPath
+    [String]$OutPath,
+    [Parameter(ParameterSetName='ps1m')][switch]$GenerateMainModule
+    # [Parameter(ParameterSetName='ps1m')][switch]$GenerateMainModule,
 
 )
 $error.clear()
@@ -27,7 +29,7 @@ $Files = @{
     psd1File     = $ScriptPath + "\Output\$ProjectName.psd1"
     Output       = $ScriptPath + "\Output\$ProjectName.ps1"
 }
-if (MultipleFiles) {
+if ($MultipleFiles) {
     $Files.JsonPath =$ScriptPath + "\Projects\$ProjectName*.json"
 }
 
@@ -54,21 +56,29 @@ if (!$AllOpen) {
 
 if ($GenerateMainModule -and !$force) {
     if (test-path $files.psm1File) {
-        $R = Read-Host "The file $TemplateFile exists, if you type ""yes"" the file will be overwritten. Any other command will exit the script. Type ""Yes"" to rebuild the existing file"
+        $R = Read-Host "The file $($files.psm1File) exists, if you type ""yes"" the file will be overwritten. Any other command will exit the script. Type ""Yes"" to rebuild the existing file"
         if ($R -notlike "yes") { return }
     }
 
     $psm1 = Get-content  $files.TemplateFile
     $URLInfo = ($open | % { $_.servers | ? { $_.containskey("url") } })
-    $MainUrl = $URLInfo.url -replace "^https?://"
-    $MainProtocol =  $URLInfo.url -replace "://.*"
+
+    $EndPoints  = $URLInfo.url -replace "^https?://"
+    $MainProtocol =  $URLInfo.url -replace "://.*" | select -first 1
     $psm1 = $psm1 -replace "!Project!",$ProjectName
-    $psm1 = $psm1 -replace "!MainURL!",$MainUrl
+    $psm1 = $psm1 -replace "!MainEndPoint!",($EndPoints | select -first 1)
+    $psm1 = $psm1 -replace "!EndPoints!",($EndPoints-join "','")
     $psm1 = $psm1 -replace "!Protocol!",$MainProtocol
+    $psm1 = $psm1 -replace "!AllURL!",
     $psm1 | out-file  $files.psm1File -force
 
-    if (test-path $files.psd1File) { remove-item $files.psd1File -force | out-null }
-    New-ModuleManifest -Path $files.psd1File -Author OpenApi-To-PowerShell -NestedModules "$ProjectName.ps1" -CmdletsToExport * -FunctionsToExport * -VariablesToExport * -AliasesToExport *
+
+
+    if (test-path $files.psd1File) {
+        remove-item $files.psd1File -force | out-null
+        write-host "Removing psd1 previous psd1 file" -ForegroundColor DarkCyan
+    }
+    New-ModuleManifest -Path $files.psd1File -Author OpenApi-To-PowerShell -NestedModules "$ProjectName.ps1" -CmdletsToExport * -FunctionsToExport * -VariablesToExport * -AliasesToExport * -RootModule  "$ProjectName.psm1"
 }
 
 
@@ -240,15 +250,9 @@ Function Convert-Parameter {
             $Parameters[$name] = @{}
 
             $Parameter  += Convert-ParameterDetails $FParam
-            if ($FunctionName -like "Get-GitHubissues") {
-                Write-host -ForegroundColor yellow " > [1] $FunctionName $($FParam.name) Schema : $( $Parameters[$name].keys -join ',')"
-            }
 
             if ( $FParam.contains("schema")) {
                 $Parameter  += Convert-ParameterDetails $FParam."schema"
-                if ($FunctionName -like "Get-GitHubissues") {
-                    Write-host -ForegroundColor yellow "  > [2] $FunctionName $($FParam.name) Schema : $( $Parameters[$name].keys -join ',')"
-                }
             }
         }
     }
@@ -420,6 +424,11 @@ foreach ($Open in $AllOpen) {
                 # write-host " > FunctionRename [$Mkey] $FunctionName > $($FunctionRename[$FunctionName])"
                 $FunctionName = $FunctionRename[$FunctionName]
             }
+            if ($FunctionRenamePattern) {
+                @($FunctionRenamePattern.psbase.keys) | % {
+                    $FunctionName = $FunctionName -replace "$_",($FunctionRenamePattern[$_])
+                }
+            }
 
             ###########################
             # Computing parameters of the function
@@ -432,10 +441,6 @@ foreach ($Open in $AllOpen) {
                 Convert-Parameter -OpenApi $open.paths[$MKey]["parameters"]
             }
             Convert-Parameter -OpenApi $open.paths[$MKey][$Method]["parameters"]
-            if ($FunctionName -like "Get-GitHubissues") {
-                Write-host -ForegroundColor Cyan "  > $FunctionName $($FParam.name) Schema : $( $Parameters[$name].keys -join ',')"
-            }
-
 
             if ($AllFunctions.containskey( $FunctionName)) {
                 if($AllFunctions[$FunctionName].containskey($Target)) {
@@ -467,23 +472,39 @@ foreach ($F in $AllFunctions.psbase.keys) {
         }
 
         foreach ($K in @($AllFunctions[$F].psbase.keys)) {
+            $PSN_ToAdd = @()
             if ($k -like $Lgs) {
                 $FunctionPSN[$F][$k] = "Search"
             } else {
                 $FunctionPSN[$F][$k] = $k.Substring($Lgs.length) -replace "{|}|/"
             }
-            $PSN_ToAdd = @($AllFunctions[$F][$k].psbase.keys) | ? { $_ -notin $InAllFunctions }
+            $PSN_ToAdd += @($AllFunctions[$F][$k].psbase.keys) | ? { $_ -notin $InAllFunctions }
+
+            # # Adding Extra parameters if wanted
+            # @($AdditionalParameters.keys) | ? { $AllFunctions[$F][$K].containskey($_) } | % {
+            #     $Clone = [System.Management.Automation.PSSerializer]::Serialize($AdditionalParameters[$_])
+            #     $AllFunctions[$F][$K] +=  [System.Management.Automation.PSSerializer]::Deserialize($Clone)
+            #     if ($PSN_ToAdd.Contains($_)) { $PSN_ToAdd += @($AdditionalParameters[$_].keys) }
+            # }
 
             # Adding Extra parameters if wanted
             @($AdditionalParameters.keys) | ? { $AllFunctions[$F][$K].containskey($_) } | % {
-                $Clone = [System.Management.Automation.PSSerializer]::Serialize($AdditionalParameters[$_])
-                $AllFunctions[$F][$K] +=  [System.Management.Automation.PSSerializer]::Deserialize($Clone)
-                if ($PSN_ToAdd.Contains($_)) { $PSN_ToAdd += @($AdditionalParameters[$_].keys) }
+                # Note serializing & deserializing is a way to clone the object
+                $Serialize   = [System.Management.Automation.PSSerializer]::Serialize($AdditionalParameters[$_])
+                $Deserialize = [System.Management.Automation.PSSerializer]::Deserialize($Serialize)
+
+                foreach ($d in @($Deserialize.psbase.keys)) {
+                    if (!$AllFunctions[$F][$K].ContainsKey($d)) {
+                        $AllFunctions[$F][$K][$d] = $Deserialize[$d]
+                        if ($PSN_ToAdd.Contains($_)) { $PSN_ToAdd += @($d) }
+                    }
+                }
             }
+
 
             # Setting ParameterSetName
             foreach ($P in $PSN_ToAdd) {
-                # Write-host "$F|$k|$p"
+                # Write-host "$F|$k|$p -- "
                 $AllFunctions[$F][$k][$P]["Parameter"] += "ParameterSetName='$($FunctionPSN[$F][$k])'"
             }
         }
@@ -537,7 +558,6 @@ foreach ($F in $AllFunctions.psbase.keys) {
             }
 
             if ( $AllFunctions[$F][$T][$p].containskey("ValidateSet") -and !$MPS) {
-                if ($F -like "Get-GitHubissues") { Write-host TESQFDQSDFQSDF : $t $p}
                 $String += "[ValidateSet('$($AllFunctions[$F][$T][$p]["ValidateSet"] -join ''',''')')]"
                 $MPS = $true
             }
