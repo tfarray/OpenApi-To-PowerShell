@@ -9,7 +9,8 @@ param(
     [hashtable]$AdditionalParameters = @{},
     [hashtable]$DescriptionToVerb = @{},
     [String]$OutPath,
-    [Parameter(ParameterSetName='ps1m')][switch]$GenerateMainModule
+    [Parameter(ParameterSetName='ps1m')][switch]$GenerateMainModule,
+    [string]$MainProtocol = "https"
     # [Parameter(ParameterSetName='ps1m')][switch]$GenerateMainModule,
 
 )
@@ -54,25 +55,27 @@ if (!$AllOpen) {
 # Generating main module file - if requested
 ###############
 
-if ($GenerateMainModule -and !$force) {
-    if (test-path $files.psm1File) {
+if ($GenerateMainModule) {
+    if ((test-path $files.psm1File) -and !$force) {
         $R = Read-Host "The file $($files.psm1File) exists, if you type ""yes"" the file will be overwritten. Any other command will exit the script. Type ""Yes"" to rebuild the existing file"
         if ($R -notlike "yes") { return }
     }
 
     $psm1 = Get-content  $files.TemplateFile
-    $URLInfo = ($open | % { $_.servers | ? { $_.containskey("url") } })
-
-    $EndPoints  = $URLInfo.url -replace "^https?://"
-    $MainProtocol =  $URLInfo.url -replace "://.*" | select -first 1
+    if ($open.ContainsKey("host")) {
+        $EndPoints = @($open.item("host"))
+        $MainProtocol = "https"
+    } else {
+        $URLInfo = ($open | % { $_.servers | ? { $_.containskey("url") } })
+        $EndPoints  = $URLInfo.url -replace "^https?://"
+        $MainProtocol =  $URLInfo.url -replace "://.*" | select -first 1
+    }
     $psm1 = $psm1 -replace "!Project!",$ProjectName
     $psm1 = $psm1 -replace "!MainEndPoint!",($EndPoints | select -first 1)
-    $psm1 = $psm1 -replace "!EndPoints!",($EndPoints-join "','")
+    $psm1 = $psm1 -replace "!EndPoints!",($EndPoints -join "','")
     $psm1 = $psm1 -replace "!Protocol!",$MainProtocol
     $psm1 = $psm1 -replace "!AllURL!",
     $psm1 | out-file  $files.psm1File -force
-
-
 
     if (test-path $files.psd1File) {
         remove-item $files.psd1File -force | out-null
@@ -225,12 +228,12 @@ Function Convert-ParameterDetails {
     if ($PDetail.contains("type")) {
         if ($PDetail.type -like "array") {
             if ($PDetail.contains("items")) {
-                $Parameters[$name]["Type"] =  $ObjectTypeConversion[$PDetail."items"."type"] + "[]"
+                $Parameters[$name]["Type"] =  (Convert-Type $PDetail."items"."type") + "[]"
             } else {
                 $Parameters[$name]["Type"] = "PsObject[]"
             }
         } elseif ($PDetail.contains("type") -and $PDetail.type ) {
-            $Parameters[$name]["Type"] = $ObjectTypeConversion[$PDetail."type"]
+            $Parameters[$name]["Type"] = Convert-Type $PDetail."type"
         }
     }
     return $parameter
@@ -274,7 +277,7 @@ Function Convert-DataSchemaToParameters {
             $Position++
         }
         if ($FParam.items.type) {
-            $Parameters[$name]["Type"] =  $ObjectTypeConversion[$FParam.items.type]
+            $Parameters[$name]["Type"] =  Convert-Type $FParam.items.type
             # write-host "$name >" $Parameters[$name]["Type"]
         } else {
             $Parameters[$name]["Type"] = "PsObject"
@@ -287,7 +290,7 @@ Function Convert-DataSchemaToParameters {
             type {
                 if ($FParam."$_" -notlike "array") {
                     # Write-host "OVER $_"
-                    $Parameters[$name]["Type"] = $ObjectTypeConversion[$FParam."$_"]
+                    $Parameters[$name]["Type"] = Convert-Type $FParam."$_"
                 }
             }
             enum {
@@ -303,6 +306,31 @@ Function Convert-DataSchemaToParameters {
         # write-host "$name >" $Parameters[$name]["Type"]
     }
 }
+
+Function Convert-Type {
+    [CmdletBinding()]
+	param (
+        [parameter(Position = 0)][string]$Type
+    )
+    process {
+        if ($Type -match "^map") {
+            return "HashTable"
+        } else {
+            $ObjectTypeConversion = @{
+                "string"    = "String"
+                "integer"   = "BigInt"
+                "number"    = "BigInt"
+                "boolean"   = "Switch"
+                "file"      = "System.IO.FileInfo"
+                "object"    = "HashTable"
+                "date-time" = "DateTime"
+            }
+            return $ObjectTypeConversion[$Type]
+        }
+    }
+}
+
+
 
 ###############
 # Other Initial parameters
@@ -340,19 +368,13 @@ $ValidateScript = @{
     "uuid" = " $_ -as [guid]"
 }
 
-$FunctionToVerb     = @{}
+#
+$AutomaticVariables = @(
+    "args","ConsoleFileName","EnabledExperimentalFeatures","Error","Event","EventArgs","EventSubscriber","ExecutionContext","false","foreach","HOME","Host","input","IsCoreCLR","IsLinux","IsMacOS","IsWindows","LASTEXITCODE","Matches","MyInvocation","NestedPromptLevel","null","PID","PROFILE","PSBoundParameters","PSCmdlet","PSCommandPath","PSCulture","PSDebugContext","PSEdition","PSHOME","PSItem","PSScriptRoot","PSSenderInfo","PSUICulture","PSVersionTable","PWD","Sender","ShellId","StackTrace","switch","this","true") | group -AsHashTable
 
-$ObjectTypeConversion = @{
-    "string"    = "String"
-    "integer"   = "BigInt"
-    "number"    = "BigInt"
-    "boolean"   = "Switch"
-    "file"      = "System.IO.FileInfo"
-    "object"    = "HashTable"
-    "date-time" = "DateTime"
-}
-
-$SchemaConversion = @{}
+$FunctionToVerb            = @{}
+$SchemaConversion          = @{}
+$ConvertAutomaticVariables = @{}
 
 
 
@@ -512,6 +534,35 @@ foreach ($F in $AllFunctions.psbase.keys) {
 }
 
 ###########
+# Converting Powershell Built-in protected variables
+###########
+foreach ($F in $AllFunctions.psbase.keys) {
+    foreach ($K in @($AllFunctions[$F].psbase.keys)) {
+         # Replacing AutomaticVariables Powershell Variables
+
+        @($AllFunctions[$F][$k].psbase.keys) | % {
+             if ($AutomaticVariables.ContainsKey($_)) {
+                $NewName = $_
+                while ($NewName -in @($AllFunctions[$F][$k].psbase.keys)) {
+                     $NewName += "X"
+                }
+                $AllFunctions[$F][$k].add($NewName,$AllFunctions[$F][$k][$_])
+                $AllFunctions[$F][$k].Remove($_)
+                if ($ConvertAutomaticVariables.ContainsKey("$F;$k")) {
+                    $ConvertAutomaticVariables["$F;$k"].Add($NewName,$_)
+                } else {
+                    $ConvertAutomaticVariables["$F;$k"] = @{ $NewName = $_ }
+                }
+                Write-host " > [$F][$K] replacing $_ >> $NewName"
+                ### To Do add ConvertAutomaticVariables to the module configuration
+                ### To Do add in the invoke the replacement of the variables
+            }
+        }
+    }
+}
+
+
+###########
 # Generating code from the HashTable
 ###########
 Write-Host Phase 3 : Generating code from the hashtable -foregroundcolor green
@@ -595,11 +646,18 @@ foreach ($F in $AllFunctions.psbase.keys) {
     $Module += ($Function -join "`n") + "`n"
 }
 
-Write-Host Phase 4 : Adding the Schema conversion when there is one -foregroundcolor green
+Write-Host Phase 4 : Adding Meta Data -foregroundcolor green
+# Adding the Schema conversion when there is one
 if ($SchemaConversion.count) {
     $Module += '$Schema = '''
     $Module +=  ($SchemaConversion | ConvertTo-Json -Depth 10) + "' | convertfrom-Json -Depth 10"
 }
+
+# Adding the conversion of Automatic Variables
+if ($ConvertAutomaticVariables.count) {
+    $Module += '$ConvertAutomaticVariables' + $ProjectName + ' = (''' + ($ConvertAutomaticVariables | ConvertTo-Json -Compress) + ''') | convertfrom-Json -AsHashtable'
+}
+
 
 ###########
 # Converting the module to a .ps1 file

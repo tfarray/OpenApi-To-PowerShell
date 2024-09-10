@@ -5,6 +5,7 @@ $!Project!_Conf = @{
     EndPoint      = "!MainEndPoint!"
     credential    = $null
     CommonParameters = ([System.Management.Automation.PSCmdlet]::CommonParameters + [System.Management.Automation.PSCmdlet]::OptionalCommonParameters)
+	!ConvertAutomaticVariables!
 }
 
 # This command is requried to, at least, set the credential
@@ -45,7 +46,7 @@ function Invoke-!Project! {
 	}
 
 	# we want to make sure that {keys} in the URL are not considered as query inputs
-	$Function = ($Function -split "/" | % {
+	$FFunc = ($Function -split "/" | % {
 		if ($_ -match "^{.*}$") {
 			$key = $_ -replace "{|}"
 			$ToIgnore += $key
@@ -97,7 +98,7 @@ function Invoke-!Project! {
     # Starting to build the Rest Method commands inputs
     $RestM = @{
         Method		  = "Get"
-        Uri			  = ("!Protocol!://$($Conf.EndPoint)" + $Function )
+        Uri			  = ("!Protocol!://$($Conf.EndPoint)" + $FFunc )
 		Headers		  = $headers
     }
 
@@ -121,6 +122,22 @@ function Invoke-!Project! {
 			$Query += ("$key=" + $PsBP[$key])
 		} else {
 			$Body[$key] = $PsBP[$key]
+		}
+	}
+
+	foreach ($Key in @($PsBP.keys | ? { $_ -notin $ToIgnore })) {
+		$RealKey = $Key
+		if ($ConvertAutomaticVariables!Project!.count) {
+			if ($ConvertAutomaticVariable!Project!.containskey("$CalledBy;$Function")) {
+				if ($ConvertAutomaticVariable!Project!["$CalledBy;$Function"].containskey($Key)) {
+					$RealKey = $ConvertAutomaticVariable!Project!["$CalledBy;$Function"][$Key]
+				}
+			}
+		}
+		if ($RestM["method"] -match "GET|DELETE") {
+			$Query += ("$RealKey=" + $PsBP[$key])
+		} else {
+			$Body[$RealKey] = $PsBP[$key]
 		}
 	}
 

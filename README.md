@@ -110,3 +110,8 @@ Initialize-Amp1 -Credential  (get-credential)
 Get-Amp1Computers
 ```
 * Final Note : I improved the generated API, you can find the modified ps1m file under /Examples/Amp1
+
+# FAQ
+## Why do I have a strange variable ending with an `X` (example : hostX)
+* Some variables are belonging to the Powershell system, and can't/shouldn't be used. You can easily find more  if you search for **about_Automatic_Variables** that will explain you why our script can't use those. Those variables HAD to be renamed, and adding an X is a way to get around this issue. Don't worry, the query will make the correct API call. You can safely ignore the trailing X.
+
