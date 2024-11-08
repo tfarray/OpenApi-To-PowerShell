@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory,Position=0)][string]$ProjectName,
     [switch]$MultipleFiles,
+    [switch]$BoolAsSwitch,
     [switch]$Force,
     [hashtable]$LastNounToVern = @{},
     [hashtable]$FunctionRename = @{},
@@ -62,6 +63,9 @@ if ($GenerateMainModule) {
     }
 
     $psm1 = Get-content  $files.TemplateFile
+    $Open = $AllOpen | ? { $_.ContainsKey("host") } | select -first 1
+    if (!$open) { $open = $AllOpen | ? { $_.ContainsKey("servers") } | select -first 1 }
+    if (!$open) { $open = $AllOpen | select -first 1 }
     if ($open.ContainsKey("host")) {
         $EndPoints = @($open.item("host"))
         $MainProtocol = "https"
@@ -74,7 +78,8 @@ if ($GenerateMainModule) {
     $psm1 = $psm1 -replace "!MainEndPoint!",($EndPoints | select -first 1)
     $psm1 = $psm1 -replace "!EndPoints!",($EndPoints -join "','")
     $psm1 = $psm1 -replace "!Protocol!",$MainProtocol
-    $psm1 = $psm1 -replace "!AllURL!",
+    # $psm1 = $psm1 -replace "!AllURL!",
+    $psm1 = $psm1 -replace "!ConvertAutomaticVariables!",""
     $psm1 | out-file  $files.psm1File -force
 
     if (test-path $files.psd1File) {
@@ -89,7 +94,10 @@ if ($GenerateMainModule) {
 # Recursive function to replace all references to the target values
 ###########################################
 function Replace-References {
-    param( [string[]]$kpath )
+    param(
+        [string[]]$kpath,
+        $Target
+    )
     # write-host $Kpath
     $Target = $Open
     $kpath | % {
@@ -149,7 +157,7 @@ foreach ($Open in $AllOpen) {
     foreach ($Key in @($Open.paths.psbase.keys)) {
         foreach ($Method in $Open.paths[$key].psbase.keys) {
             $Target = $Open.paths[$key][$Method]
-            if ($Target.containsKey("requestBody")) {
+            if ($Target -is [hashtable] -and $Target.containsKey("requestBody")) {
                 if ($Target["requestBody"].containsKey("content")) {
                     if ($Target["requestBody"]["content"].containsKey("application/json")) {
                         if ($Target["requestBody"]["content"]["application/json"].containsKey("schema")) {
@@ -161,6 +169,7 @@ foreach ($Open in $AllOpen) {
                                     $NewParam["description"] = $schema.properties[$Prop]["description"]
                                     $NewParam["schema"] = @{ "Type" = $schema.properties[$Prop]["type"] }
                                     $Target["parameters"] += @($NewParam)
+                                    # Write-host $key $Method $NewParam
                                 }
                             }
                             if ($schema.containskey("oneOf")) {
@@ -221,6 +230,9 @@ Function Convert-ParameterDetails {
         format {
             $Parameters[$name]["ValidateScript"] = $ValidateScript[$PDetail["format"]]
         }
+        "in" {
+            $Parameters[$name]["In"] = $PDetail["in"]
+        }
     }
     if ($Parameter) {
         $Parameters[$name]["Parameter"] += @($Parameter)
@@ -261,51 +273,54 @@ Function Convert-Parameter {
     }
 }
 
-Function Convert-DataSchemaToParameters {
-    param(
-        $OpenApiParameters
-    )
-    $Position = 0
-    foreach ($name in $OpenApiParameters["properties"].keys) {
-        $Parameters[$name] = @{}
-        $Parameter  = @()
-        $FParam = $OpenApiParameters["properties"][$name]
+# Function Convert-DataSchemaToParameters {
+#     param(
+#         $OpenApiParameters
+#     )
+#     $Position = 0
+#     foreach ($name in $OpenApiParameters["properties"].keys) {
+#         $Parameters[$name] = @{}
+#         $Parameter  = @()
+#         $FParam = $OpenApiParameters["properties"][$name]
 
-        if ($name -in $OpenApiParameters.required) {
-            $Parameter += "Mandatory"
-            $Parameter += "Position=$Position"
-            $Position++
-        }
-        if ($FParam.items.type) {
-            $Parameters[$name]["Type"] =  Convert-Type $FParam.items.type
-            # write-host "$name >" $Parameters[$name]["Type"]
-        } else {
-            $Parameters[$name]["Type"] = "PsObject"
-        }
-        if ($FParam."type" -like "array") {
-            $Parameters[$name]["Type"] += "[]"
-        }
+#         if ($name -in $OpenApiParameters.required) {
+#             $Parameter += "Mandatory"
+#             $Parameter += "Position=$Position"
+#             $Position++
+#         }
+#         if ($FParam.items.type) {
+#             $Parameters[$name]["Type"] =  Convert-Type $FParam.items.type
+#             # write-host "$name >" $Parameters[$name]["Type"]
+#         } else {
+#             $Parameters[$name]["Type"] = "PsObject"
+#         }
+#         if ($FParam."type" -like "array") {
+#             $Parameters[$name]["Type"] += "[]"
+#         }
 
-        switch ($FParam.psbase.keys) {
-            type {
-                if ($FParam."$_" -notlike "array") {
-                    # Write-host "OVER $_"
-                    $Parameters[$name]["Type"] = Convert-Type $FParam."$_"
-                }
-            }
-            enum {
-                $Parameters[$name]["ValidateSet"] = $FParam["enum"]
-            }
-            format {
-                $Parameters[$name]["ValidateScript"] = $ValidateScript[$FParam["format"]]
-            }
-        }
-        if ($Parameter) {
-            $Parameters[$name]["Parameter"] = $Parameter
-        }
-        # write-host "$name >" $Parameters[$name]["Type"]
-    }
-}
+#         switch ($FParam.psbase.keys) {
+#             type {
+#                 if ($FParam."$_" -notlike "array") {
+#                     # Write-host "OVER $_"
+#                     $Parameters[$name]["Type"] = Convert-Type $FParam."$_"
+#                 }
+#             }
+#             enum {
+#                 $Parameters[$name]["ValidateSet"] = $FParam["enum"]
+#             }
+#             format {
+#                 $Parameters[$name]["ValidateScript"] = $ValidateScript[$FParam["format"]]
+#             }
+#             "in" {
+#                 $Parameters[$name]["in"] = $ValidateScript[$FParam["in"]]
+#             }
+#         }
+#         if ($Parameter) {
+#             $Parameters[$name]["Parameter"] = $Parameter
+#         }
+#         # write-host "$name >" $Parameters[$name]["Type"]
+#     }
+# }
 
 Function Convert-Type {
     [CmdletBinding()]
@@ -313,19 +328,16 @@ Function Convert-Type {
         [parameter(Position = 0)][string]$Type
     )
     process {
-        if ($Type -match "^map") {
-            return "HashTable"
-        } else {
-            $ObjectTypeConversion = @{
-                "string"    = "String"
-                "integer"   = "BigInt"
-                "number"    = "BigInt"
-                "boolean"   = "Switch"
-                "file"      = "System.IO.FileInfo"
-                "object"    = "HashTable"
-                "date-time" = "DateTime"
-            }
-            return $ObjectTypeConversion[$Type]
+        switch -regex ($Type) {
+            "^map"        { return "HashTable" }
+            "^string$"    { return "String" }
+            "^integer$"   { return "int" }
+            "^number$"    { return "int" }
+            "^boolean$"   { if ($BoolAsSwitch) { return "switch" } else { return "bool" } }
+            "^file$"      { return "System.IO.FileInfo" }
+            "^object$"    { return "HashTable" }
+            "^date-time$" { return "DateTime" }
+            default     { return "PsObject" }
         }
     }
 }
@@ -362,6 +374,7 @@ $MethodToVerb = @{
     "delete" = "Remove"
     "patch"  = "Update"
 }
+$WriteCommand = "Set","New","Update"
 
 
 $ValidateScript = @{
@@ -407,9 +420,9 @@ foreach ($Open in $AllOpen) {
         ########################################
 
         # Building the Parameter List
-
         foreach ($Method in (@($open.paths[$MKey].psbase.keys) | ? { $_ -in $(@($MethodToVerb.keys)) } | sort)) {
             # Building the Verb
+
             $LocalNoun  = $Noun
             $Verb       = $MethodToVerb[$Method]
 
@@ -435,29 +448,27 @@ foreach ($Open in $AllOpen) {
                 }
             }
 
-            if ($open.paths[$MKey][$Method].ContainsKey("requestBody")) {
-                $Parameters["Body"] = @{}
-                $Parameters["Body"]["type"] = "HashTable"
-            }
-
             $Target = "$MKey"
             $FunctionName = "$Verb-$ProjectName$LocalNoun"
+
             if ($FunctionRename.containskey($FunctionName)) {
-                # write-host " > FunctionRename [$Mkey] $FunctionName > $($FunctionRename[$FunctionName])"
                 $FunctionName = $FunctionRename[$FunctionName]
             }
+
             if ($FunctionRenamePattern) {
                 @($FunctionRenamePattern.psbase.keys) | % {
                     $FunctionName = $FunctionName -replace "$_",($FunctionRenamePattern[$_])
                 }
             }
 
+
+
             ###########################
             # Computing parameters of the function
             ###########################
             $Parameters = @{}
             $Position   = 0
-            $Parameter  = @()
+            # $Parameter  = @()
 
             if ($open.paths[$MKey].ContainsKey("parameters")) {
                 Convert-Parameter -OpenApi $open.paths[$MKey]["parameters"]
@@ -473,10 +484,66 @@ foreach ($Open in $AllOpen) {
             } else {
                 $AllFunctions[$FunctionName] = @{ "$Target" = $Parameters }
             }
+
+             # Note : This shouldn't do anything as we reset the parameter below
+             if ($open.paths[$MKey][$Method].ContainsKey("requestBody")) {
+                $Parameters["Body"] = @{}
+                $Parameters["Body"]["type"] = "HashTable"
+            }
         }
+
+
         if ($Error) { write-host $MKey $FunctionRename ; return }
     }
 }
+
+###########
+# Fixes/small tweaks :
+#  - excluding parameters that are already in query for another path
+# Issue First seen in JiraAlign API
+###########
+foreach ($F in @($AllFunctions.psbase.keys)) {
+
+    # Excluding parameters that are elsewhere in the path
+    $PresentIn = @()
+    $ToExclude = @()
+    if ($AllFunctions[$F].count -gt 1) {
+        foreach ($K in @($AllFunctions[$F].psbase.keys)) {
+            foreach ($P in @($AllFunctions[$F][$K].psbase.keys)) {
+                if ($AllFunctions[$F][$K][$P]["in"] -like "path") {
+                    $PresentIn += $k
+                    $ToExclude += $p
+                }
+            }
+        }
+
+        if ($ToExclude.count) {
+            foreach ($K in (@($AllFunctions[$F].psbase.keys) | ? { $_ -notin $PresentIn })) {
+                $ToExclude | ? { $AllFunctions[$F][$K].containskey($_)} | %{
+
+                    $AllFunctions[$F][$K].remove($_)
+                }
+            }
+        }
+    }
+
+    foreach ($K in @($AllFunctions[$F].psbase.keys)) {
+        @($AdditionalParameters.keys) | ? { $AllFunctions[$F][$K].containskey($_) } | % {
+            $Serialize   = [System.Management.Automation.PSSerializer]::Serialize($AdditionalParameters[$_])
+            $Deserialize = [System.Management.Automation.PSSerializer]::Deserialize($Serialize)
+
+            foreach ($d in @($Deserialize.psbase.keys)) {
+                if (!$AllFunctions[$F][$K].ContainsKey($d)) {
+                    $AllFunctions[$F][$K][$d] = $Deserialize[$d]
+                }
+            }
+        }
+    }
+
+
+}
+
+
 
 ###########
 # Adding multiple parameter set parameters
@@ -502,28 +569,6 @@ foreach ($F in $AllFunctions.psbase.keys) {
             }
             $PSN_ToAdd += @($AllFunctions[$F][$k].psbase.keys) | ? { $_ -notin $InAllFunctions }
 
-            # # Adding Extra parameters if wanted
-            # @($AdditionalParameters.keys) | ? { $AllFunctions[$F][$K].containskey($_) } | % {
-            #     $Clone = [System.Management.Automation.PSSerializer]::Serialize($AdditionalParameters[$_])
-            #     $AllFunctions[$F][$K] +=  [System.Management.Automation.PSSerializer]::Deserialize($Clone)
-            #     if ($PSN_ToAdd.Contains($_)) { $PSN_ToAdd += @($AdditionalParameters[$_].keys) }
-            # }
-
-            # Adding Extra parameters if wanted
-            @($AdditionalParameters.keys) | ? { $AllFunctions[$F][$K].containskey($_) } | % {
-                # Note serializing & deserializing is a way to clone the object
-                $Serialize   = [System.Management.Automation.PSSerializer]::Serialize($AdditionalParameters[$_])
-                $Deserialize = [System.Management.Automation.PSSerializer]::Deserialize($Serialize)
-
-                foreach ($d in @($Deserialize.psbase.keys)) {
-                    if (!$AllFunctions[$F][$K].ContainsKey($d)) {
-                        $AllFunctions[$F][$K][$d] = $Deserialize[$d]
-                        if ($PSN_ToAdd.Contains($_)) { $PSN_ToAdd += @($d) }
-                    }
-                }
-            }
-
-
             # Setting ParameterSetName
             foreach ($P in $PSN_ToAdd) {
                 # Write-host "$F|$k|$p -- "
@@ -534,14 +579,15 @@ foreach ($F in $AllFunctions.psbase.keys) {
 }
 
 ###########
-# Converting Powershell Built-in protected variables
+# Fixes/small tweaks :
+#  - Built-in protected variables
+#  - Adding AdditionalParameters
 ###########
-foreach ($F in $AllFunctions.psbase.keys) {
+foreach ($F in @($AllFunctions.psbase.keys)) {
+    # Replacing AutomaticVariables Powershell Variables
     foreach ($K in @($AllFunctions[$F].psbase.keys)) {
-         # Replacing AutomaticVariables Powershell Variables
-
         @($AllFunctions[$F][$k].psbase.keys) | % {
-             if ($AutomaticVariables.ContainsKey($_)) {
+            if ($AutomaticVariables.ContainsKey($_)) {
                 $NewName = $_
                 while ($NewName -in @($AllFunctions[$F][$k].psbase.keys)) {
                      $NewName += "X"
@@ -619,7 +665,7 @@ foreach ($F in $AllFunctions.psbase.keys) {
             }
             # note : This is not dealt as of today ... replacement will fail if there is a replacement in the parameter name
         }
-        $String += $LT + ('$' + ($p -replace " |-"))
+        $String += $LT + ('$' + ($p -replace ' |-|\$')) # fixing $ issues for Jira align
         $AllParams += $s*2 + $String
     }
 
@@ -631,12 +677,29 @@ foreach ($F in $AllFunctions.psbase.keys) {
         $Function += ($s + "param ( )")
     }
 
-    if ($AllFunctions[$F].count -gt 1) {  $Function += $s + "Switch (`$PsCmdlet.ParameterSetName) {" }
+    if ($AllFunctions[$F].count -gt 1) {
+        $Function += $s + "Switch (`$PsCmdlet.ParameterSetName) {"
+    }
+
+
+
+
     @($AllFunctions[$F].keys) | % {
+        # write-host " > $F"
+        $InQuery = ""
+        if (($F -replace "-.*") -in $WriteCommand) {
+            $Z = $_
+            # write-host "    > write [$F] [$Z]"
+            $InQ =  (@($AllFunctions[$F][$Z].keys) | ? {
+                $AllFunctions[$F][$Z][$_]["in"] -like "query"
+            })
+            if ($InQ) { $InQuery = '-InQuery "' + ($InQ -join '","') + '"' }
+        }
+
         if ($AllFunctions[$F].count -gt 1) {
-            $Function += $s*2 + "'$($FunctionPSN[$F][$_])' { Invoke-$ProjectName -PsBP `$PsBoundParameters '$_' } "
+            $Function += $s*2 + "'$($FunctionPSN[$F][$_])' { Invoke-$ProjectName -PsBP `$PsBoundParameters '$_' $InQuery} "
         } else {
-            $Function += $s + "Invoke-$ProjectName -PsBP `$PsBoundParameters '$_'"
+            $Function += $s + "Invoke-$ProjectName -PsBP `$PsBoundParameters '$_' $InQuery"
         }
     }
     if ($AllFunctions[$F].count -gt 1) { $Function += $s + "}" }
@@ -653,7 +716,7 @@ if ($SchemaConversion.count) {
     $Module +=  ($SchemaConversion | ConvertTo-Json -Depth 10) + "' | convertfrom-Json -Depth 10"
 }
 
-# Adding the conversion of Automatic Variables
+# Adding the conversion of Autom        atic         Variables
 if ($ConvertAutomaticVariables.count) {
     $Module += '$ConvertAutomaticVariables' + $ProjectName + ' = (''' + ($ConvertAutomaticVariables | ConvertTo-Json -Compress) + ''') | convertfrom-Json -AsHashtable'
 }

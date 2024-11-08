@@ -78,6 +78,26 @@ Yes, the main file has to be manually buit, this function will come. At the mome
   * You can thereafter run any command you like
 
 # Real case senarios
+## JiraCloud v3
+1. Download from Jira the Open API descriptor of the v3 of Jira Cloud to the projects folder
+2. Run `.\ConvertProject.ps1 -ProjectName JiraCloud -FunctionRenamePattern @{ "RestApi3" = "" } -GenerateMainModule`
+Done ! But JiraCloud is full of renaming patters. You can use instead the JiraCloud.psm1 file I have created for JiraCloud in the `Examples\JiraCloud` folder. The ps1m file contains some specific data in the `Format-JiraCloud` section. You might want to change the `switch -Regex ($Type)` section.
+
+**How to use the module** :
+```
+# Load the module
+Import-Module .\JiraCloud.psd1 -force
+
+# Set the credentials and the portal you are using ($Cred is a PsCredential object)
+Initialize-JiraCloud -Credential $cred -EndPoint My-jira.atlassian.net
+
+# Do a JQL search
+Search-JiraCloud -jql "type = 'Epic'" -maxResults 1
+
+# Get an issue
+Get-JiraIssue XXXX-1234`
+```
+
 ## Cisco Secure Endpoint API
 1. Download all the yaml file fir the v1 API from [The Cisco API reference Guide](https://developer.cisco.com/docs/secure-endpoint/auditlog/)
 2. Convert all the .yaml files to .json files
