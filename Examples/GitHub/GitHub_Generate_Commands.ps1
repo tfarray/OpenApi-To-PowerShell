@@ -20,4 +20,4 @@ $Variables = @{
     }
 }
 
-.\ConvertProject.ps1 @Variables
+. .\ConvertProject.ps1 @Variables

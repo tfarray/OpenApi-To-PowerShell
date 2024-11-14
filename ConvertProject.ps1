@@ -427,8 +427,15 @@ foreach ($Open in $AllOpen) {
             $Verb       = $MethodToVerb[$Method]
 
             if ($LastNoun -and $LastNounToVern.containskey($LastNoun)) {
-                # Write-host " > LastNounToVern [$MKey] $Verb-$ProjectName$OriginalNoun > $($LastNounToVern[$LastNoun])-$ProjectName$LocalNoun"
-                $Verb = $LastNounToVern[$LastNoun]
+                if ($LastNounToVern[$LastNoun] -is [hashtable]) {
+                    if ($Method -like $LastNounToVern[$LastNoun]["Method"]) {
+                        $Verb = $LastNounToVern[$LastNoun]["Verb"]
+                    } else {
+                        $LocalNoun = $OriginalNoun
+                    }
+                } else {
+                    $Verb = $LastNounToVern[$LastNoun]
+                }
             } else {
                 $LocalNoun = $OriginalNoun
             }
