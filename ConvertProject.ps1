@@ -7,6 +7,7 @@ param(
     [hashtable]$LastNounToVern = @{},
     [hashtable]$FunctionRename = @{},
     [hashtable]$FunctionRenamePattern = @{},
+    [string[]]$FunctionNeverRequired = @(),
     [hashtable]$AdditionalParameters = @{},
     [hashtable]$DescriptionToVerb = @{},
     [String]$OutPath,
@@ -213,15 +214,17 @@ Function Get-LongestCommonString {
 
 Function Convert-ParameterDetails {
     param(
-        $PDetail
+        $PDetail,
+        $Name
     )
     $Parameter = @()
+    # write-host ($PDetail | out-string)
     switch (@($PDetail.psbase.keys)) {
         required {
-            if ($PDetail["required"]) { # This is because required might be false
+            if ($PDetail["required"] -and $name -notin $FunctionNeverRequired) { # This is because required might be false
                 $Parameter += "Mandatory"
-                $Parameter += "Position=$Position"
-                $Position++
+                $Parameter += "Position=$($global:Position)"
+                $global:Position++
             }
         }
         enum {
@@ -264,10 +267,10 @@ Function Convert-Parameter {
             $Name = $FParam.name
             $Parameters[$name] = @{}
 
-            $Parameter  += Convert-ParameterDetails $FParam
+            $Parameter  += Convert-ParameterDetails $FParam $Name
 
             if ( $FParam.contains("schema")) {
-                $Parameter  += Convert-ParameterDetails $FParam."schema"
+                $Parameter  += Convert-ParameterDetails $FParam."schema" $Name
             }
         }
     }
@@ -474,7 +477,7 @@ foreach ($Open in $AllOpen) {
             # Computing parameters of the function
             ###########################
             $Parameters = @{}
-            $Position   = 0
+            $global:Position   = 0
             # $Parameter  = @()
 
             if ($open.paths[$MKey].ContainsKey("parameters")) {
