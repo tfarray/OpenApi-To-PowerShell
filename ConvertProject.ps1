@@ -1,3 +1,97 @@
+<#
+.SYNOPSIS
+This script converts OpenAPI specifications into PowerShell modules.
+
+.DESCRIPTION
+The script processes OpenAPI JSON files to generate PowerShell modules with cmdlets that correspond to the API endpoints. It supports customization of cmdlet names, parameter sets, and other module configurations.
+
+.PARAMETER ProjectName
+MANDATORY : The name of the project or API being converted. This is used to locate the OpenAPI JSON file and name the generated module.
+
+.PARAMETER MultipleFiles
+Indicates whether multiple JSON files should be processed. Those files needs to have the same naming : ie : MyModule_1,MyModule_Z, etc.
+
+.PARAMETER BoolAsSwitch
+Converts boolean parameters into PowerShell switches.
+
+.PARAMETER Force
+Forces overwriting of existing files without prompting.
+
+.PARAMETER LastNounToVern
+A hashtable mapping the last noun in a cmdlet name to a specific verb. For example, multiple API calls end with update, and Actionrefresh would be one of them. @{ refresh = 'Update' }, Will change the associated command from Set-ActionRefresh to Update-Action.
+
+.PARAMETER FunctionRename
+A hashtable for renaming generated functions. example : @{ "Get-MyFunction" = "Get-MyNewFunction" }.
+
+.PARAMETER FunctionRenamePattern
+A hashtable for renaming functions using patterns. example : @{ "MyStupidNamedFunction" = "MyNamedFunction" }. The word "Stupid" will be removed from the command name.
+
+.PARAMETER FunctionNeverRequired
+An array of parameter names that should never be marked as mandatory.
+
+.PARAMETER AdditionalParameters
+A hashtable of additional parameters to include in ALL the generated cmdlets.
+
+.PARAMETER DescriptionToVerb
+A hashtable mapping descriptions to specific verbs for cmdlet naming.
+
+.PARAMETER OutPath
+Specifies the output path for the generated module.
+
+.PARAMETER GenerateMainModule
+Generates a main module file (.psm1) for the project.
+
+.PARAMETER MainProtocol
+Specifies the default protocol (e.g., "https") for the API.
+
+.EXAMPLE
+$Variables = @{
+    ProjectName           = "MyP1"
+    FunctionRenamePattern =  @{ "MyP1ApiSubF" = "MyP1" }
+    # Get-MyP1ApiSubFPing
+    # New-MyP1ApiDascodeHostDecommhost
+    FunctionRename = @{
+        "Get-MyP1ApiSubFPing" = "Test-MyP1API"
+        "New-MyP1ApiSubFHostDecommhost" = "Remove-MyP1Host"
+        "New-MyP1HostRemovefrombundle" = "Remove-MyP1HostFromBundle"
+        "New-MyP1ApiStorageRemovefrombundle" = "Remove-StorageFromBundle"
+        "New-MyP1HostRemovefrombundleProj" = "Remove-MyP1HostFromBundle"
+    }
+}
+.\ConvertProject.ps1 @Variables
+
+# As no output was mentioned, files will be created in .\output
+# <ProjectName> : This will search for a file called MyP1.json as input from the folder .\Projects
+# <FunctionRenamePattern> : Any command such as Get-MyP1ApiSubF will be renamed Get-MyP1. Same for all the other commands beneth
+
+
+
+.EXAMPLE
+$Variables = @{
+    ProjectName = "GitHub"
+    LastNounToVern = @{
+        disable    = "Disable"
+        enable     = "Enable"
+    }
+    FunctionRename = @{
+        "New-GitHubReposActionsWorkflowsDispatches"   = "Start-GitHubReposActionsWorkflows"
+    }
+    AdditionalParameters = @{
+        page = @{ GetAll = @{ Type = "Switch"  ; Parameter = @() }}
+    }
+    BoolAsSwitch = $true
+}
+.\ConvertProject.ps1 @Variables
+
+After Downloading GitHub OpenApi Json Specification to GitHub.json
+<LastNounToVern> : any API call ending with disable will be renamed. Originally, you would have this command : Set-GitHubSomethingDisable. Using this command, you will have Disable-GitHubSomething instead.
+<FunctionRename> : The command New-GitHubReposActionsWorkflowsDispatches will be renamed Start-GitHubReposActionsWorkflows.
+<AdditionalParameters> : Each time a command has a parameter <page>, another parameter called <GetAll> will also be added. This parameter will need to get processed in the .ps1m module manually, but as outcome, you will have to write this only once for all the commands that have multiple pages. This .psm1 file is in the git repoisitory if you want to have a look at it.
+
+.NOTES
+Author: OpenApi-To-PowerShell
+Version: 1.0
+#>
 [CmdletBinding(DefaultParameterSetName='None')]
 param(
     [Parameter(Mandatory,Position=0)][string]$ProjectName,
@@ -6,10 +100,11 @@ param(
     [switch]$Force,
     [hashtable]$LastNounToVern = @{},
     [hashtable]$FunctionRename = @{},
-    [hashtable]$FunctionRenamePattern = @{},
-    [string[]]$FunctionNeverRequired = @(),
+    [System.Collections.Specialized.OrderedDictionary]$FunctionRenamePattern = @{},
     [hashtable]$AdditionalParameters = @{},
     [hashtable]$DescriptionToVerb = @{},
+    [string[]]$FunctionNeverRequired = @(),
+    [string[]]$FunctionNeverAdded = @(),
     [String]$OutPath,
     [Parameter(ParameterSetName='ps1m')][switch]$GenerateMainModule,
     [string]$MainProtocol = "https"
@@ -107,7 +202,6 @@ function Replace-References {
         $Target     = $Target["$_"]
 
     }
-    # Write-Progress -Activity "Replacing References" -Status "Processing $kpath"
 
     if ($Target -is [array]) {
         $NewResults = @()
@@ -258,7 +352,7 @@ Function Convert-Parameter {
     param(
         $OpenApiParameters
     )
-    foreach ($FParam in $OpenApiParameters) {
+    foreach ($FParam in ($OpenApiParameters | ? { $_.name -notin $FunctionNeverAdded })) {
         if ($FParam.in -like "body" -and $FParam.schema) {
             $Parameters[$FParam.name] = @{}
             $Parameters[$FParam.name]["Type"] = "HashTable"
@@ -467,6 +561,7 @@ foreach ($Open in $AllOpen) {
 
             if ($FunctionRenamePattern) {
                 @($FunctionRenamePattern.psbase.keys) | % {
+                    Write-host " > Converting $_"
                     $FunctionName = $FunctionName -replace "$_",($FunctionRenamePattern[$_])
                 }
             }
