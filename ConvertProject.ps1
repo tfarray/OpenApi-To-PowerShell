@@ -219,7 +219,9 @@ function Replace-References {
     } elseif ($Target -is [hashtable]) {
         if ($Target['$ref']) {
             $RefTarget = $Open
-            $Target['$ref'] -replace '^#/' -split "/" | % { $RefTarget = $RefTarget["$_"] }
+            $Target['$ref'] -replace '^#/' -split "/" | ? {
+                $RefTarget["$_"]
+            } | % { $RefTarget = $RefTarget["$_"] }
             $LastTarget["$LastKey"] = $RefTarget
         }
         @($Target.keys) | % {
@@ -561,8 +563,9 @@ foreach ($Open in $AllOpen) {
 
             if ($FunctionRenamePattern) {
                 @($FunctionRenamePattern.psbase.keys) | % {
-                    Write-host " > Converting $_"
+                    Write-host " > Converting $FunctionName" -NoNewline
                     $FunctionName = $FunctionName -replace "$_",($FunctionRenamePattern[$_])
+                    Write-host " >> $FunctionName"
                 }
             }
 
