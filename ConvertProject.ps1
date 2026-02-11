@@ -135,7 +135,15 @@ if ($OutPath) {
     $Files.Output      = ($OutPath + "\$ProjectName.ps1") -replace  "\\\\","\"
 }
 
-if (!(test-path $Files.JsonPath)) {
+# Validate JSON file(s) exist
+if ($MultipleFiles) {
+    $jsonFiles = @(Get-Item $Files.JsonPath -ErrorAction SilentlyContinue)
+    if ($jsonFiles.Count -eq 0) {
+        Write-Host "No JSON files found matching pattern: $($Files.JsonPath)" -ForegroundColor red
+        return
+    }
+    Write-Host "Found $($jsonFiles.Count) JSON file(s) to process" -ForegroundColor Cyan
+} elseif (!(Test-Path $Files.JsonPath)) {
     Write-Host "The file $($Files.JsonPath) does not exist" -ForegroundColor red
     return
 }
@@ -233,7 +241,7 @@ function Replace-References {
 foreach ($Open in $AllOpen) { Replace-References paths }
 
 ###########################################
-# Interative function that replaces schema references to its definition
+# Iterative function that replaces schema references to its definition
 ###########################################
 foreach ($Open in $AllOpen) {
     $Open.paths.psbase.keys | % {
@@ -358,7 +366,6 @@ Function Convert-Parameter {
         if ($FParam.in -like "body" -and $FParam.schema) {
             $Parameters[$FParam.name] = @{}
             $Parameters[$FParam.name]["Type"] = "HashTable"
-            if ($error) { exit }
         } else {
             $Name = $FParam.name
             $Parameters[$name] = @{}
@@ -372,54 +379,6 @@ Function Convert-Parameter {
     }
 }
 
-# Function Convert-DataSchemaToParameters {
-#     param(
-#         $OpenApiParameters
-#     )
-#     $Position = 0
-#     foreach ($name in $OpenApiParameters["properties"].keys) {
-#         $Parameters[$name] = @{}
-#         $Parameter  = @()
-#         $FParam = $OpenApiParameters["properties"][$name]
-
-#         if ($name -in $OpenApiParameters.required) {
-#             $Parameter += "Mandatory"
-#             $Parameter += "Position=$Position"
-#             $Position++
-#         }
-#         if ($FParam.items.type) {
-#             $Parameters[$name]["Type"] =  Convert-Type $FParam.items.type
-#             # write-host "$name >" $Parameters[$name]["Type"]
-#         } else {
-#             $Parameters[$name]["Type"] = "PsObject"
-#         }
-#         if ($FParam."type" -like "array") {
-#             $Parameters[$name]["Type"] += "[]"
-#         }
-
-#         switch ($FParam.psbase.keys) {
-#             type {
-#                 if ($FParam."$_" -notlike "array") {
-#                     # Write-host "OVER $_"
-#                     $Parameters[$name]["Type"] = Convert-Type $FParam."$_"
-#                 }
-#             }
-#             enum {
-#                 $Parameters[$name]["ValidateSet"] = $FParam["enum"]
-#             }
-#             format {
-#                 $Parameters[$name]["ValidateScript"] = $ValidateScript[$FParam["format"]]
-#             }
-#             "in" {
-#                 $Parameters[$name]["in"] = $ValidateScript[$FParam["in"]]
-#             }
-#         }
-#         if ($Parameter) {
-#             $Parameters[$name]["Parameter"] = $Parameter
-#         }
-#         # write-host "$name >" $Parameters[$name]["Type"]
-#     }
-# }
 
 Function Convert-Type {
     [CmdletBinding()]
@@ -447,7 +406,7 @@ Function Convert-Type {
 # Other Initial parameters
 ###############
 # $InitialTrim = Get-LongestCommonString $Open.paths.keys
-$s = " " * 4
+$indent = " " * 4  # Indentation for generated code
 
 ###################
 # None costumable variables
@@ -600,8 +559,6 @@ foreach ($Open in $AllOpen) {
             }
         }
 
-
-        if ($Error) { write-host $MKey $FunctionRename ; return }
     }
 }
 
@@ -664,9 +621,7 @@ foreach ($F in $AllFunctions.psbase.keys) {
         $FunctionPSN[$F] = @{}
         $LGS = (Get-LongestCommonString $AllFunctions[$F].psbase.keys)
         $InAllFunctions = $AllFunctions[$F].values.keys | group | ? { $_.count -like $Multiple } | select -ExpandProperty Name
-        if ($f -like "Get-GitHubReposActionsWorkflows") {
-            # Write-host " $F InAllFunctions : $($InAllFunctions -join ',') || $LGS"
-        }
+
 
         foreach ($K in @($AllFunctions[$F].psbase.keys)) {
             $PSN_ToAdd = @()
@@ -726,9 +681,9 @@ foreach ($F in $AllFunctions.psbase.keys) {
 
     $Function += "Function $F {"
     if ($FunctionPSN.ContainsKey($F)) {
-        $Function += $s + "[CmdletBinding(DefaultParameterSetName='Search')]"
+        $Function += $indent + "[CmdletBinding(DefaultParameterSetName='Search')]"
     } else {
-        $Function += $s + "[CmdletBinding()]"
+        $Function += $indent + "[CmdletBinding()]"
     }
 
     $UniqueP = @{}
@@ -741,76 +696,72 @@ foreach ($F in $AllFunctions.psbase.keys) {
     $InAllFunctions = $AllFunctions[$F].values.keys | group | ? { $_.count -like  $AllFunctions[$F].count       } | select -ExpandProperty Name
 
     $AllParams = @()
-    foreach ($p in $UniqueP.psbase.keys) {
-        $String = ""
-        $MPS = $false ; $LT = $null ; $IAF = $InAllFunctions -contains "$p"
-        # if ($F -like 'Get-GitHubReposActionsArtifacts') {
-        #     Write-host "$F|$p|$IAF ... $($InAllFunctions -join ',')" -ForegroundColor yellow
-        # }
-        foreach ($T in ($UniqueP[$p])) {
-            # $Types | % { $ShortT = $ShortT -replace ("^$ShortRemove") }
-            # if ($F -like 'Get-GitHubReposActionsArtifacts') {
-            #     Write-host " > $T|$IAF" -ForegroundColor blue
-            # }
-            if ( $AllFunctions[$F][$T][$p].containskey("Parameter")) {
-                if ($InAllFunctions -notcontains $p) {
-                    if ($IAF) { $String += "`n" + $s*2 } else { $IAF = $true }
-                    $String += "[Parameter(" +  ($AllFunctions[$F][$T][$p]["Parameter"] -join ",") + ")]"
-                } elseif ($IAF) {
-                    $String += "[Parameter(" +  ($AllFunctions[$F][$T][$p]["Parameter"] -join ",") + ")]"
-                    $IAF = $false
+    foreach ($paramName in $UniqueP.psbase.keys) {
+        $paramString = ""
+        $hasValidateSet = $false
+        $paramType = $null
+        $isInAllFunctions = $InAllFunctions -contains "$paramName"
+        
+        foreach ($targetPath in ($UniqueP[$paramName])) {
+            $paramDetails = $AllFunctions[$F][$targetPath][$paramName]
+            
+            if ($paramDetails.containskey("Parameter")) {
+                if ($InAllFunctions -notcontains $paramName) {
+                    if ($isInAllFunctions) { $paramString += "`n" + $indent*2 } else { $isInAllFunctions = $true }
+                    $paramString += "[Parameter(" + ($paramDetails["Parameter"] -join ",") + ")]"
+                } elseif ($isInAllFunctions) {
+                    $paramString += "[Parameter(" + ($paramDetails["Parameter"] -join ",") + ")]"
+                    $isInAllFunctions = $false
                 }
             }
 
-            if ( $AllFunctions[$F][$T][$p].containskey("ValidateSet") -and !$MPS) {
-                $String += "[ValidateSet('$($AllFunctions[$F][$T][$p]["ValidateSet"] -join ''',''')')]"
-                $MPS = $true
+            if ($paramDetails.containskey("ValidateSet") -and !$hasValidateSet) {
+                $paramString += "[ValidateSet('$($paramDetails["ValidateSet"] -join ''',''')')]"
+                $hasValidateSet = $true
             }
 
-            if ($AllFunctions[$F][$T][$p].containskey("type") -and !$LT) {
-                # write-host type 2 $AllFunctions[$F][$T][$p]["type"]
-                $LT = '[' + $AllFunctions[$F][$T][$p]["type"] + "]"
+            if ($paramDetails.containskey("type") -and !$paramType) {
+                $paramType = '[' + $paramDetails["type"] + "]"
             }
-            # note : This is not dealt as of today ... replacement will fail if there is a replacement in the parameter name
         }
-        $String += $LT + ('$' + ($p -replace ' |-|\$')) # fixing $ issues for Jira align
-        $AllParams += $s*2 + $String
+        $paramString += $paramType + ('$' + ($paramName -replace ' |-|\$'))
+        $AllParams += $indent*2 + $paramString
     }
 
     if ($AllParams) {
-        $Function += $s + "param ("
+        $Function += $indent + "param ("
         $Function += ($AllParams | sort) -join ",`n"
-        $Function += $s + ")"
+        $Function += $indent + ")"
     } else {
-        $Function += ($s + "param ( )")
+        $Function += ($indent + "param ( )")
     }
 
     if ($AllFunctions[$F].count -gt 1) {
-        $Function += $s + "Switch (`$PsCmdlet.ParameterSetName) {"
+        $Function += $indent + "Switch (`$PsCmdlet.ParameterSetName) {"
     }
 
-
-
-
+    # Process each API path for this function
     @($AllFunctions[$F].keys) | % {
-        # write-host " > $F"
-        $InQuery = ""
+        $currentPath = $_
+        $queryParametersArg = ""
+        
+        # For write commands, identify query parameters
         if (($F -replace "-.*") -in $WriteCommand) {
-            $Z = $_
-            # write-host "    > write [$F] [$Z]"
-            $InQ =  (@($AllFunctions[$F][$Z].keys) | ? {
-                $AllFunctions[$F][$Z][$_]["in"] -like "query"
-            })
-            if ($InQ) { $InQuery = '-InQuery "' + ($InQ -join '","') + '"' }
+            $queryParams = @($AllFunctions[$F][$currentPath].keys) | Where-Object {
+                $AllFunctions[$F][$currentPath][$_]["in"] -like "query"
+            }
+            if ($queryParams) { 
+                $queryParametersArg = '-InQuery "' + ($queryParams -join '","') + '"' 
+            }
         }
 
         if ($AllFunctions[$F].count -gt 1) {
-            $Function += $s*2 + "'$($FunctionPSN[$F][$_])' { Invoke-$ProjectName -PsBP `$PsBoundParameters '$_' $InQuery} "
+            $Function += $indent*2 + "'$($FunctionPSN[$F][$currentPath])' { Invoke-$ProjectName -PsBP `$PsBoundParameters '$currentPath' $queryParametersArg} "
         } else {
-            $Function += $s + "Invoke-$ProjectName -PsBP `$PsBoundParameters '$_' $InQuery"
+            $Function += $indent + "Invoke-$ProjectName -PsBP `$PsBoundParameters '$currentPath' $queryParametersArg"
         }
     }
-    if ($AllFunctions[$F].count -gt 1) { $Function += $s + "}" }
+    if ($AllFunctions[$F].count -gt 1) { $Function += $indent + "}" }
     $Function += "}"
     $Function += "Export-ModuleMember $F"
 
@@ -824,7 +775,7 @@ if ($SchemaConversion.count) {
     $Module +=  ($SchemaConversion | ConvertTo-Json -Depth 10) + "' | convertfrom-Json -Depth 10"
 }
 
-# Adding the conversion of Autom        atic         Variables
+# Adding the conversion of Automatic Variables
 if ($ConvertAutomaticVariables.count) {
     $Module += '$ConvertAutomaticVariables' + $ProjectName + ' = (''' + ($ConvertAutomaticVariables | ConvertTo-Json -Compress) + ''') | convertfrom-Json -AsHashtable'
 }
@@ -839,5 +790,5 @@ if ($Files.Output) {
     $Module -join "`n"  | out-file $Files.Output
 }
 
-
-return
+# Exit successfully
+exit 0
